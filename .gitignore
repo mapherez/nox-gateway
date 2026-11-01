@@ -1,0 +1,10 @@
+/bin/
+/data/
+/coverage.out
+.env
+.env.*
+!.env.example
+*.test
+*.prof
+.DS_Store
+__pycache__/
