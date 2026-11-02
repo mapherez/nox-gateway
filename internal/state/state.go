@@ -33,6 +33,7 @@ type Store struct {
 	root      *os.Root
 	lock      *os.File
 	identity  Identity
+	ioMu      sync.Mutex
 	closeOnce sync.Once
 	closeErr  error
 }

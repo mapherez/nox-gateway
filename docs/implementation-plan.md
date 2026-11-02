@@ -8,7 +8,7 @@ Tests and CI evolve with every point; delivery checks are not postponed to the e
 | Point | Deliverable | Status |
 | --- | --- | --- |
 | 1 | Go executable, published SDK v0.7.0, configuration, persistent discovery identity, private/exclusive state, diagnostics, lifecycle logs, cancellation/shutdown, tests and CI. | Implemented; local verification recorded below. |
-| 2 | HTTPS and secure Backend pairing, trusted target validation, resumable provisioning and persisted credentials before ACK, credential rotation/revocation, restart recovery, `/nox/integration`. Include the owner's internal CA, certificate issuance/renewal, Nginx Proxy Manager `home.arpa` hosts, client/container trust, and validation from LAN/Twingate with the owner. | Pending. |
+| 2 | HTTPS and secure Backend pairing, trusted target validation, resumable provisioning and persisted credentials before ACK, credential rotation/revocation, restart recovery, `/nox/integration`. Include the owner's internal CA, certificate issuance/renewal, Nginx Proxy Manager `home.arpa` hosts, client/container trust, and validation from LAN/Twingate with the owner. | In progress: local implementation/tests; operator HTTPS setup remains pending. |
 | 3 | Backend registry snapshot, long-poll events, transactional application/invalidation, cursors/reconciliation, safe removal/replacement handling. Backend remains authoritative. | Pending. |
 | 4 | Personal-key admission and verified per-product delegation, bounded memory caches, user/key/view isolation, on-demand renewal, revocation and outage behavior. | Pending. |
 | 5 | Trusted product connections, user-independent restricted probes, readiness observations, persistent sequence/epoch handling, reconnects and failure isolation. | Pending. |
@@ -80,3 +80,18 @@ implemented Gateway against Backend over trusted HTTPS; protocol participants
 must be identified as test fixtures, not invented Suite products or claims that
 unadapted products already work. Adaptations of Yard/other products, CLI and
 Portal are separate scopes under the same approved contracts.
+
+## Point 2 operator workflow clarification
+
+The approved delivery uses deployment-provided TLS. Gateway remains provider- and
+environment-independent; automatic Suite-wide certificate management is deferred
+as separate future product work. The optional home.arpa helper is an example
+operator tool, not a runtime requirement or built-in CA. Follow
+[HTTPS setup and cleanup](https-setup.md) for isolated files, renewal, proxy/client
+trust and complete removal. The owner paused before executing earlier setup
+commands; no real homelab CA has been reported as created or trusted yet.
+
+Local checks have exercised real Gateway/Backend HTTPS pairing, credential
+rotation, restart and revocation against Backend v1.0.15 with disposable state.
+These results do not mark point 2 complete: the homelab ingress, CA/client trust
+and installed pairing still need owner-assisted validation.

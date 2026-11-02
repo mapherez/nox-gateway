@@ -46,3 +46,38 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -o bin/nox-gateway-linux-amd64 ./cmd/nox-gateway
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=readonly -trimpath -o bin/nox-gateway-linux-arm64 ./cmd/nox-gateway
+
+  backend-integration:
+    name: Actual Backend / HTTPS service trust
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Gateway
+        uses: actions/checkout@v7.0.1
+      - name: Checkout published Backend baseline
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: mapherez/nox-backend
+          ref: 577f46175ada6dc0742925329d6dbc444c548b44 # v1.0.15
+          path: .integration/nox-backend
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache-dependency-path: |
+            go.sum
+            .integration/nox-backend/backend/go.sum
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Build actual Gateway
+        run: go build -mod=readonly -trimpath -o "$RUNNER_TEMP/nox-gateway" ./cmd/nox-gateway
+      - name: Build actual Backend
+        working-directory: .integration/nox-backend/backend
+        run: go build -mod=readonly -trimpath -o "$RUNNER_TEMP/nox-backend" ./cmd/nox-backend
+      - name: Require actual pairing, rotation, restart and revocation
+        env:
+          NOX_GATEWAY_TEST_BACKEND_BINARY: ${{ runner.temp }}/nox-backend
+          NOX_GATEWAY_TEST_GATEWAY_BINARY: ${{ runner.temp }}/nox-gateway
+        run: go test -race -mod=readonly -count=1 -v ./internal/acceptance

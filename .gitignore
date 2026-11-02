@@ -8,3 +8,11 @@
 *.prof
 .DS_Store
 __pycache__/
+
+# Disposable integration checkouts; private TLS/pairing inputs stay outside Git.
+/.integration/
+*.key
+*.pem
+*.p12
+*.pfx
+/pairing*.json

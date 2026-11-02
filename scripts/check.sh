@@ -9,6 +9,7 @@ fi
 go mod tidy -diff
 go mod verify
 go vet -mod=readonly ./...
+python3 -m unittest discover -s scripts -p 'test_*.py'
 go test -race -mod=readonly -count=1 ./...
 mkdir -p bin
 go build -mod=readonly -trimpath -o bin/nox-gateway ./cmd/nox-gateway

@@ -49,3 +49,38 @@ func TestInvalidSettingsNeverEchoValues(t *testing.T) {
 		}
 	}
 }
+
+func TestSuiteTLSConfigurationRejectsImplicitTrustAndInvalidOrigins(t *testing.T) {
+	valid := map[string]string{"NOX_GATEWAY_PUBLIC_URL": "https://gateway.home.arpa/", "NOX_GATEWAY_BACKEND_URL": "https://backend.home.arpa/", "NOX_GATEWAY_TLS_CERT_FILE": "cert.pem", "NOX_GATEWAY_TLS_KEY_FILE": "key.pem", "NOX_GATEWAY_SUITE_ALLOWED_CIDRS": "192.168.10.0/24"}
+	c, err := Load(lookup(valid))
+	if err != nil || c.PublicURL != "https://gateway.home.arpa" || c.BackendURL != "https://backend.home.arpa" {
+		t.Fatal("valid configured origins did not normalize")
+	}
+	for name, values := range map[string][]string{
+		"NOX_GATEWAY_PUBLIC_URL":          {"http://gateway.home.arpa", "https://gateway.home.arpa/apps/gateway", "https://secret@gateway.home.arpa", ""},
+		"NOX_GATEWAY_SUITE_ALLOWED_CIDRS": {"", "192.168.10.10/24", "secret"},
+		"NOX_GATEWAY_SUITE_ALLOWED_PORTS": {"", "0", "65536", "0443", "-1"},
+		"NOX_GATEWAY_TLS_KEY_FILE":        {""}, "NOX_GATEWAY_BACKEND_TLS_PIN": {"secret"},
+	} {
+		for _, value := range values {
+			next := map[string]string{}
+			for k, v := range valid {
+				next[k] = v
+			}
+			next[name] = value
+			if _, err := Load(lookup(next)); err == nil || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unsafe Suite configuration accepted for %s", name)
+			}
+		}
+	}
+	delete(valid, "NOX_GATEWAY_TLS_CERT_FILE")
+	delete(valid, "NOX_GATEWAY_TLS_KEY_FILE")
+	valid["NOX_GATEWAY_PUBLIC_TLS_CERT_FILE"] = "npm-cert.pem"
+	if _, err := Load(lookup(valid)); err == nil {
+		t.Fatal("proxy certificate alone granted transport trust")
+	}
+	valid["NOX_GATEWAY_TRUSTED_PROXY_CIDRS"] = "172.19.0.2/32"
+	if _, err := Load(lookup(valid)); err != nil {
+		t.Fatal(err)
+	}
+}

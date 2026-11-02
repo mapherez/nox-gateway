@@ -3,16 +3,19 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"sync/atomic"
 	"time"
 
 	"github.com/mapherez/nox-gateway/internal/buildinfo"
 	"github.com/mapherez/nox-gateway/internal/logging"
+	"github.com/mapherez/nox-gateway/internal/transport"
 )
 
 var (
@@ -20,21 +23,34 @@ var (
 	ErrShutdown = errors.New("graceful shutdown exceeded its configured deadline")
 )
 
-type Server struct {
-	http     *http.Server
-	stopping atomic.Bool
+type Options struct {
+	TLSConfig         *tls.Config
+	TrustedProxyCIDRs []netip.Prefix
+	ConnectionStatus  func() string
 }
 
-func New(version string, logger *slog.Logger) *Server {
-	s := &Server{}
+type Server struct {
+	options     Options
+	declaration json.RawMessage
+	http        *http.Server
+	stopping    atomic.Bool
+}
+
+func New(version string, logger *slog.Logger, options Options) (*Server, error) {
+	declaration, err := Declaration(version)
+	if err != nil {
+		return nil, errors.New("invalid Gateway build declaration")
+	}
+	s := &Server{options: options, declaration: declaration}
 	s.http = &http.Server{
 		Handler:           s.routes(version),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 		ErrorLog:          logging.HTTPErrorLog(logger),
+		TLSConfig:         options.TLSConfig,
 	}
-	return s
+	return s, nil
 }
 
 func (s *Server) routes(version string) http.Handler {
@@ -42,13 +58,17 @@ func (s *Server) routes(version string) http.Handler {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		if r.URL.Path != "/healthz" && r.URL.Path != "/readyz" {
+		if r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/nox/integration" {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
 			return
 		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			writeJSON(w, r, http.StatusMethodNotAllowed, map[string]string{"code": "METHOD_NOT_ALLOWED"})
+			return
+		}
+		if r.URL.Path == "/nox/integration" {
+			writeJSON(w, r, http.StatusOK, s.declaration)
 			return
 		}
 		if r.URL.Path == "/healthz" {
@@ -59,11 +79,14 @@ func (s *Server) routes(version string) http.Handler {
 			return
 		}
 		code := "GATEWAY_NOT_CONFIGURED"
+		if s.connectionStatus() != "notPaired" {
+			code = "GATEWAY_NOT_READY"
+		}
 		if s.stopping.Load() {
 			code = "SHUTTING_DOWN"
 		}
 		// Point 1 cannot admit integrated traffic. Liveness is not MCP readiness.
-		writeJSON(w, r, http.StatusServiceUnavailable, map[string]string{"status": "notReady", "code": code})
+		writeJSON(w, r, http.StatusServiceUnavailable, map[string]string{"status": "notReady", "code": code, "serviceConnection": s.connectionStatus()})
 	})
 }
 
@@ -86,7 +109,13 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener, timeout time.
 	defer cancelRequests()
 	s.http.BaseContext = func(net.Listener) context.Context { return requests }
 	served := make(chan error, 1)
-	go func() { served <- s.http.Serve(listener) }()
+	go func() {
+		if s.http.TLSConfig != nil {
+			served <- s.http.ServeTLS(listener, "", "")
+		} else {
+			served <- s.http.Serve(listener)
+		}
+	}()
 	select {
 	case err := <-served:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -106,4 +135,25 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener, timeout time.
 		<-served
 		return nil
 	}
+}
+
+func (s *Server) connectionStatus() string {
+	if s.options.ConnectionStatus == nil {
+		return "notPaired"
+	}
+	return s.options.ConnectionStatus()
+}
+
+// RequireHTTPS is the admission boundary for authenticated Gateway handlers.
+// Diagnostics/declarations contain no credentials and do not establish trust.
+func (s *Server) RequireHTTPS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !transport.IsHTTPS(r, s.options.TrustedProxyCIDRs) {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, r, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
