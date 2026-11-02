@@ -2,14 +2,12 @@ package app
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -172,29 +170,13 @@ func TestCancelledStartupAndListenerFailure(t *testing.T) {
 	}
 }
 
-func TestAuthenticatedBoundaryRejectsPlaintextAndForgedProxyClaims(t *testing.T) {
-	s, err := New("test-build", slog.New(slog.NewJSONHandler(io.Discard, nil)), Options{TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("172.19.0.2/32")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	admitted := false
-	protected := s.RequireHTTPS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { admitted = true; w.WriteHeader(204) }))
-	for _, tc := range []struct {
-		peer string
-		tls  bool
-		want int
-	}{{"192.168.10.15:1234", false, 403}, {"172.19.0.2:1234", false, 204}, {"192.168.10.15:1234", true, 204}} {
-		admitted = false
-		r := httptest.NewRequest("POST", "http://gateway.home.arpa/mcp", nil)
-		r.RemoteAddr = tc.peer
-		r.Header.Set("X-Forwarded-Proto", "https")
-		if tc.tls {
-			r.TLS = &tls.ConnectionState{}
-		}
-		w := httptest.NewRecorder()
-		protected.ServeHTTP(w, r)
-		if w.Code != tc.want || admitted != (tc.want == 204) {
-			t.Fatal("incorrect HTTPS admission")
-		}
+func TestPairingCannotBeInvokedThroughNativeTCP(t *testing.T) {
+	s := testServer()
+	r := httptest.NewRequest("POST", "http://nox-gateway/nox/integration/pairing", strings.NewReader(`{}`))
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	s.http.Handler.ServeHTTP(w, r)
+	if w.Code != 404 {
+		t.Fatal("network pairing was exposed", w.Code)
 	}
 }

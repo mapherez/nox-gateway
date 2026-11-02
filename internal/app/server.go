@@ -9,13 +9,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"sync/atomic"
 	"time"
 
 	"github.com/mapherez/nox-gateway/internal/buildinfo"
 	"github.com/mapherez/nox-gateway/internal/logging"
-	"github.com/mapherez/nox-gateway/internal/transport"
 )
 
 var (
@@ -24,9 +22,11 @@ var (
 )
 
 type Options struct {
-	TLSConfig         *tls.Config
-	TrustedProxyCIDRs []netip.Prefix
-	ConnectionStatus  func() string
+	PublicURL        string
+	TLSConfig        *tls.Config
+	MCPHandler       http.Handler
+	Ready            func() bool
+	ConnectionStatus func() string
 }
 
 type Server struct {
@@ -58,6 +58,24 @@ func (s *Server) routes(version string) http.Handler {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.URL.Path == "/mcp" && s.options.MCPHandler != nil {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				expected := s.options.PublicURL
+				if expected == "" {
+					scheme := "http"
+					if r.TLS != nil {
+						scheme = "https"
+					}
+					expected = scheme + "://" + r.Host
+				}
+				if origin != expected {
+					writeJSON(w, r, 403, map[string]string{"code": "FORBIDDEN"})
+					return
+				}
+			}
+			s.options.MCPHandler.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/nox/integration" {
 			writeJSON(w, r, http.StatusNotFound, map[string]string{"code": "NOT_FOUND"})
 			return
@@ -78,6 +96,10 @@ func (s *Server) routes(version string) http.Handler {
 			})
 			return
 		}
+		if !s.stopping.Load() && s.options.Ready != nil && s.options.Ready() {
+			writeJSON(w, r, 200, map[string]string{"status": "ready", "serviceConnection": s.connectionStatus()})
+			return
+		}
 		code := "GATEWAY_NOT_CONFIGURED"
 		if s.connectionStatus() != "notPaired" {
 			code = "GATEWAY_NOT_READY"
@@ -85,7 +107,7 @@ func (s *Server) routes(version string) http.Handler {
 		if s.stopping.Load() {
 			code = "SHUTTING_DOWN"
 		}
-		// Point 1 cannot admit integrated traffic. Liveness is not MCP readiness.
+		// Readiness requires live trust and the synchronized Backend registry.
 		writeJSON(w, r, http.StatusServiceUnavailable, map[string]string{"status": "notReady", "code": code, "serviceConnection": s.connectionStatus()})
 	})
 }
@@ -142,18 +164,4 @@ func (s *Server) connectionStatus() string {
 		return "notPaired"
 	}
 	return s.options.ConnectionStatus()
-}
-
-// RequireHTTPS is the admission boundary for authenticated Gateway handlers.
-// Diagnostics/declarations contain no credentials and do not establish trust.
-func (s *Server) RequireHTTPS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !transport.IsHTTPS(r, s.options.TrustedProxyCIDRs) {
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			writeJSON(w, r, http.StatusForbidden, map[string]string{"code": "FORBIDDEN"})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

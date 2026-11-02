@@ -9,6 +9,7 @@ fi
 go mod tidy -diff
 go mod verify
 go vet -mod=readonly ./...
+node --test scripts/release.test.mjs
 python3 -m unittest discover -s scripts -p 'test_*.py'
 go test -race -mod=readonly -count=1 ./...
 mkdir -p bin

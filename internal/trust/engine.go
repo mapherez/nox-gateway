@@ -7,29 +7,35 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mapherez/nox-gateway/internal/backend"
 	"github.com/mapherez/nox-gateway/internal/buildinfo"
 	"github.com/mapherez/nox-gateway/internal/config"
-	"github.com/mapherez/nox-gateway/internal/securefile"
 	"github.com/mapherez/nox-gateway/internal/transport"
 	noxmcp "github.com/mapherez/nox-mcp/go"
 )
 
+type authoritySnapshot struct{ raw []byte }
+
 type Engine struct {
-	cfg            config.Config
-	store          Store
-	client         *backend.Client
-	doc            Document
-	declaration    json.RawMessage
-	fingerprint    string
-	tlsFingerprint string
-	logger         *slog.Logger
-	status         status
+	mu          sync.Mutex
+	authority   atomic.Pointer[authoritySnapshot]
+	cfg         config.Config
+	store       Store
+	client      *backend.Client
+	doc         Document
+	fingerprint string
+	logger      *slog.Logger
+	status      status
 }
 
-func New(c config.Config, store Store, declaration json.RawMessage, pin string, logger *slog.Logger) (*Engine, error) {
+func New(c config.Config, store Store, declaration json.RawMessage, logger *slog.Logger) (*Engine, error) {
+	if c.BackendURL != "" && c.BackendURL != "http://nox-backend" {
+		return nil, ErrBinding
+	}
 	raw, err := store.LoadTrust()
 	if err != nil {
 		return nil, err
@@ -46,7 +52,7 @@ func New(c config.Config, store Store, declaration json.RawMessage, pin string, 
 	if err != nil {
 		return nil, ErrResponse
 	}
-	e := &Engine{cfg: c, store: store, doc: doc, declaration: declaration, fingerprint: fingerprint, tlsFingerprint: pin, logger: logger}
+	e := &Engine{cfg: c, store: store, doc: doc, fingerprint: fingerprint, logger: logger}
 	e.status.set("notPaired")
 	if c.BackendURL == "" {
 		if doc.Binding != nil || doc.Pending != nil {
@@ -65,24 +71,19 @@ func New(c config.Config, store Store, declaration json.RawMessage, pin string, 
 			e.Close()
 		}
 	}()
-	if c.PairingFile != "" {
-		if err = e.preparePairing(); err != nil {
-			return nil, err
-		}
-	}
 	if e.doc.Pending != nil {
 		e.status.set("provisioning")
-		if e.doc.Pending.BackendOrigin != c.BackendURL || e.doc.Pending.BackendPin != c.BackendTLSPin {
+		if e.doc.Pending.BackendOrigin != c.BackendURL || e.doc.Pending.BackendPin != "" {
 			return nil, ErrBinding
 		}
 		if e.doc.Pending.Kind == "pairing" {
 			b := e.doc.Pending.Proof.Binding
-			if b.BaseUrl != c.PublicURL || b.DeclarationFingerprint != fingerprint || b.TlsPublicKeyFingerprint != pin {
+			if b.BaseUrl != "http://nox-gateway" || b.DeclarationFingerprint != fingerprint || b.TlsPublicKeyFingerprint != nil {
 				return nil, ErrBinding
 			}
 		}
 	} else if b := e.doc.Binding; b != nil {
-		if b.PublicURL != c.PublicURL || b.TLSFingerprint != pin || b.Provisioning.BackendOrigin != c.BackendURL || b.BackendPin != c.BackendTLSPin {
+		if b.PublicURL != "http://nox-gateway" || b.TLSFingerprint != "" || b.Provisioning.BackendOrigin != c.BackendURL || b.BackendPin != "" {
 			return nil, ErrBinding
 		}
 		if b.Revoked {
@@ -116,31 +117,40 @@ func (e *Engine) save() error {
 	return e.store.SaveTrust(raw)
 }
 
-func (e *Engine) preparePairing() error {
-	raw, err := securefile.Read(e.cfg.PairingFile, true, noxmcp.SuiteMaxPayloadBytes)
-	if err != nil {
+// Receive is called only by the same-host pairing receiver. It durably records
+// the exact proof/operation keys before any completion or acknowledgement.
+func (e *Engine) Receive(ctx context.Context, intent noxmcp.SuitePairingIntent) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.prepareIntent(intent); err != nil {
 		return err
 	}
-	intent, err := noxmcp.LoadSuitePairingIntent(raw)
+	return e.reconcile(ctx)
+}
+func (e *Engine) prepareIntent(intent noxmcp.SuitePairingIntent) error {
+	if e.client == nil {
+		return ErrRecovery
+	}
+	raw, err := json.Marshal(intent)
 	if err != nil {
 		return ErrRecovery
+	}
+	if _, err = noxmcp.LoadSuitePairingIntent(raw); err != nil {
+		return ErrRecovery
+	}
+	if intent.ProductID != buildinfo.ProductID || intent.Purpose != "gateway" || intent.BaseUrl != "http://nox-gateway" || intent.ManagedBy != nil {
+		return ErrBinding
 	}
 	if intent.PairingID == e.doc.LastPairingID {
 		return nil
 	}
-	if intent.ProductID != buildinfo.ProductID || intent.Purpose != "gateway" || intent.BaseUrl != e.cfg.PublicURL || intent.ManagedBy != nil {
-		return ErrBinding
-	}
 	if e.doc.Pending != nil {
-		if e.doc.Pending.Kind == "pairing" && e.doc.Pending.Proof.Binding.PairingID == intent.PairingID {
-			return nil
-		}
-		expires, err := time.Parse(time.RFC3339Nano, e.doc.Pending.ExpiresAt)
-		if err != nil || time.Now().Before(expires) {
+		if e.doc.Pending.Kind != "pairing" || e.doc.Pending.Proof.Binding.PairingID != intent.PairingID {
 			return ErrRecovery
 		}
+		return nil
 	}
-	expires, err := time.Parse(time.RFC3339Nano, intent.ExpiresAt)
+	expires, err := noxmcp.ParseSuiteTimestamp(intent.ExpiresAt)
 	if err != nil || !expires.After(time.Now()) || expires.After(time.Now().Add(605*time.Second)) {
 		return ErrRecovery
 	}
@@ -148,56 +158,53 @@ func (e *Engine) preparePairing() error {
 	if err != nil {
 		return ErrRecovery
 	}
-	binding := noxmcp.SuitePairingBinding{ContractVersion: buildinfo.ContractVersion, PairingID: intent.PairingID, Nonce: intent.Nonce, ProductID: buildinfo.ProductID, DeclarationFingerprint: e.fingerprint, BaseUrl: e.cfg.PublicURL, TlsPublicKeyFingerprint: e.tlsFingerprint}
+	binding := noxmcp.SuitePairingBinding{ContractVersion: "1.0", PairingID: intent.PairingID, Nonce: intent.Nonce, ProductID: buildinfo.ProductID, DeclarationFingerprint: e.fingerprint, BaseUrl: "http://nox-gateway"}
 	proof, err := noxmcp.CreateSuitePairingProof(secret, binding)
 	if err != nil {
 		return ErrRecovery
 	}
-	e.doc.Pending = &Operation{BackendOrigin: e.cfg.BackendURL, BackendPin: e.cfg.BackendTLSPin, Kind: "pairing", RequestKey: rand.Text(), AckKey: rand.Text(), ExpiresAt: intent.ExpiresAt, Proof: &noxmcp.SuitePairingProof{ContractVersion: buildinfo.ContractVersion, Binding: binding, Proof: proof}}
-	return e.save() // The exact proof and idempotency keys are durable before HTTP.
+	e.authority.Store(nil)
+	e.doc.Pending = &Operation{BackendOrigin: "http://nox-backend", Kind: "pairing", RequestKey: rand.Text(), AckKey: rand.Text(), ExpiresAt: intent.ExpiresAt, Proof: &noxmcp.SuitePairingProof{ContractVersion: "1.0", Binding: binding, Proof: proof}}
+	if err = e.save(); err != nil {
+		return err
+	}
+	e.status.set("provisioning")
+	return nil
 }
 
-// Run retries only recoverable management exchanges with their original durable
-// keys. It never retries a tool call. Non-retryable failures require reconciliation.
-func (e *Engine) Run(ctx context.Context) {
-	if e.client == nil || (e.doc.Binding == nil && e.doc.Pending == nil) {
-		return
+// Authority returns a private copy only after live verification in this process.
+func (e *Engine) Authority() (noxmcp.SuiteProvisioning, KeySet, error) {
+	snapshot := e.authority.Load()
+	if snapshot == nil {
+		return noxmcp.SuiteProvisioning{}, KeySet{}, ErrRecovery
 	}
-	delay := time.Second
-	for ctx.Err() == nil {
-		err := e.Reconcile(ctx)
-		if err == nil {
-			return
-		}
-		if ctx.Err() != nil {
-			return
-		}
-		var failure *backend.Failure
-		retry := errors.As(err, &failure) && failure.Retryable
-		if !retry && e.Status() != "revoked" && e.Status() != "authorizationDenied" {
-			e.status.set("recoveryRequired")
-		}
-		e.logger.Warn("gateway_trust_not_ready", "status", e.Status())
-		if !retry {
-			return
-		}
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-		if delay < 30*time.Second {
-			delay *= 2
-			if delay > 30*time.Second {
-				delay = 30 * time.Second
-			}
-		}
+	var b Binding
+	if json.Unmarshal(snapshot.raw, &b) != nil {
+		return noxmcp.SuiteProvisioning{}, KeySet{}, ErrRecovery
 	}
+	return b.Provisioning, b.SigningKeys, nil
+}
+func (e *Engine) Request(ctx context.Context, method, path, key string, body any) ([]byte, int, error) {
+	p, _, err := e.Authority()
+	if err != nil {
+		return nil, 0, err
+	}
+	return e.client.Request(ctx, method, path, p.ServiceCredential, key, "", body)
 }
 
 func (e *Engine) Reconcile(ctx context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	err := e.reconcile(ctx)
+	if err != nil {
+		var failure *backend.Failure
+		if !errors.As(err, &failure) || !failure.Retryable {
+			e.authority.Store(nil)
+		}
+	}
+	return err
+}
+func (e *Engine) reconcile(ctx context.Context) error {
 	if e.doc.UpdatedAt > time.Now().Add(5*time.Second).UnixMilli() {
 		return ErrClock
 	}
@@ -235,8 +242,15 @@ func (e *Engine) Reconcile(ctx context.Context) error {
 	if err = e.save(); err != nil {
 		return err
 	}
+	raw, err := json.Marshal(e.doc.Binding)
+	if err != nil {
+		return ErrResponse
+	}
+	e.authority.Store(&authoritySnapshot{raw: raw})
+	if e.status.get() != "paired" {
+		e.logger.Info("gateway_service_verified")
+	}
 	e.status.set("paired")
-	e.logger.Info("gateway_service_verified")
 	return nil
 }
 
@@ -244,6 +258,7 @@ func (e *Engine) fail(err error) error {
 	var failure *backend.Failure
 	if errors.As(err, &failure) {
 		if failure.Denied && e.doc.Pending == nil && e.doc.Binding != nil {
+			e.authority.Store(nil)
 			e.doc.Binding.Denied = true
 			if saveErr := e.save(); saveErr != nil {
 				return saveErr
@@ -294,14 +309,14 @@ func (e *Engine) completePairing(ctx context.Context) error {
 	// Persist completed binding first. A following GET outage must not discard an
 	// ACK that already committed; restart can safely verify the saved association.
 	p.Service = identity
-	e.doc.Binding = &Binding{PublicURL: e.cfg.PublicURL, TLSFingerprint: e.tlsFingerprint, BackendPin: e.cfg.BackendTLSPin, Provisioning: *p}
+	e.doc.Binding = &Binding{PublicURL: "http://nox-gateway", Provisioning: *p}
 	e.doc.LastPairingID = p.PairingID
 	e.doc.Pending = nil
 	if err = e.save(); err != nil {
 		return err
 	}
 	e.logger.Info("gateway_pairing_acknowledged")
-	return e.Reconcile(ctx)
+	return e.reconcile(ctx)
 }
 
 func (e *Engine) acknowledge(ctx context.Context, path string, p *noxmcp.SuiteProvisioning, key string) (noxmcp.SuiteServiceIdentity, error) {
@@ -366,4 +381,12 @@ func (e *Engine) refreshKeys(ctx context.Context, issuer string) error {
 	}
 	e.doc.Binding.SigningKeys = keys
 	return nil
+}
+
+// HumanRegistry authenticates a client even when it has no Suite MCP products.
+func (e *Engine) HumanRegistry(ctx context.Context, key string) ([]byte, int, error) {
+	if _, _, err := e.Authority(); err != nil {
+		return nil, 0, err
+	}
+	return e.client.Request(ctx, "GET", "/api/nox/products", key, "", "", nil)
 }

@@ -1,97 +1,84 @@
-# Gateway implementation sequence
+# Gateway implementation sequence and correction record
 
-This sequence implements the existing NoX Suite contract. It is not a set of
-provisional product versions and does not reopen approved decisions. Implement,
-validate, and stop after each numbered point for the owner's OK to continue.
-Tests and CI evolve with every point; delivery checks are not postponed to the end.
+This record implements the existing NoX Suite plan and the owner's explicit
+same-host clarification. It does not replace or modify the original MCP plan.
+Backend is the authority, Yard remains the deployment/registration initiator,
+and Gateway is a headless Go router for any conforming present or future product.
 
-| Point | Deliverable | Status |
+## Fixed Suite correction points
+
+The owner authorized these **two existing correction points together**, before
+returning to Yard. Their original names and numbering are retained:
+
+- **6. Adaptar o Gateway ao mesmo processo de configuração.**
+- **9. Retomar os restantes pontos do Gateway.**
+
+Execution order is **6 + 9 → 7 → 8 → 10 → 11 → 12**. Points 7/8 concern Yard and
+its lifecycle; point 10 adapts participating products, point 11 implements the
+CLI and point 12 validates the complete Suite journey/delivery. Completing Gateway
+source and local acceptance does not mean those other components are implemented.
+
+## Earlier Gateway work breakdown
+
+These are the Gateway repository's earlier eight deliverables, not a renumbering
+of the Suite correction sequence. HTTPS-only service transport and manual pairing
+files in the old point 2/8 descriptions were superseded by the same-host correction.
+The optional certificate helper remains independent; it is not a setup requirement.
+
+| Point | Gateway deliverable | Current implementation |
 | --- | --- | --- |
-| 1 | Go executable, published SDK v0.7.0, configuration, persistent discovery identity, private/exclusive state, diagnostics, lifecycle logs, cancellation/shutdown, tests and CI. | Implemented; local verification recorded below. |
-| 2 | HTTPS and secure Backend pairing, trusted target validation, resumable provisioning and persisted credentials before ACK, credential rotation/revocation, restart recovery, `/nox/integration`. Include the owner's internal CA, certificate issuance/renewal, Nginx Proxy Manager `home.arpa` hosts, client/container trust, and validation from LAN/Twingate with the owner. | In progress: local implementation/tests; operator HTTPS setup remains pending. |
-| 3 | Backend registry snapshot, long-poll events, transactional application/invalidation, cursors/reconciliation, safe removal/replacement handling. Backend remains authoritative. | Pending. |
-| 4 | Personal-key admission and verified per-product delegation, bounded memory caches, user/key/view isolation, on-demand renewal, revocation and outage behavior. | Pending. |
-| 5 | Trusted product connections, user-independent restricted probes, readiness observations, persistent sequence/epoch handling, reconnects and failure isolation. | Pending. |
-| 6 | Conventional/incremental private discovery, aggregation, collision-safe aliases, auxiliary references, fingerprints/snapshots, client MCP endpoint and negotiated notifications, authenticated empty catalogs, no self-aggregation. | Pending. |
-| 7 | Authorized dispatch to original tools, definition/association checks, shrinking total deadline, global capacity/payload bounds, cancellation, correct results/errors and uncertain-write handling without automatic tool retries. | Pending. |
-| 8 | Docker/Compose/persistence, HTTPS deployment documentation, version/release scripts and workflows, required packaging checks and installed validation, real Backend integration plus generic conforming protocol participants and failure paths. | Pending. |
+| 1 | Go executable, SDK, configuration, persistent discovery identity, private/exclusive state, diagnostics, lifecycle, tests and CI. | Implemented; SDK upgraded to published 0.7.2. |
+| 2 | Secure Backend pairing, resumable provisioning, persisted credential before ACK, rotation/revocation, restart recovery and declaration. | Implemented over the shared local socket channel, delivered automatically from Backend configuration. No manual certificate/pairing file workflow. |
+| 3 | Backend snapshot, long-poll events, atomic persistence/invalidation, cursors/reconciliation, removal/replacement. | Implemented; cached registry is not authority on restart. |
+| 4 | Personal-key admission, verified product delegations, bounded private caches, expiry/renewal/revocation/outage behavior. | Implemented; explicit denial has no stale fallback. |
+| 5 | Product connections, restricted service probes, observations, persistent sequence/epoch, reconnect and source isolation. | Implemented; authenticated stateless discovery for MCP 2026 and legacy ping. |
+| 6 | Conventional/incremental private discovery, aliases, references, fingerprints, client MCP, authenticated empty catalogs, no self-aggregation. | Implemented with the published SDK; JSON exchanges/private TTL and re-read semantics, no standalone SSE subscription advertisement. |
+| 7 | Authorized dispatch, definition/association checks, shrinking deadline, capacity/payload bounds, cancellation and uncertain writes without retries. | Implemented; native client cancellation is preserved across MCP context boundaries. |
+| 8 | Docker/Compose, persistence, documentation, release tooling/workflows, packaging checks and actual Backend integration. | Implemented locally; GitHub CI/publication and installed deployment are external results, not claimed by local tests. |
 
-## Approved deployment and ownership
+## Local acceptance boundary
 
-Gateway is a headless Go service, without a React/Vite frontend. Native Backend
-administration provides the foundation connection configuration. One Backend
-administers the environment. Product IDs and tools are discovered through the
-contract; no product-specific routes, business schemas, or catalog allowlist.
+The real-service acceptance uses independent Backend **v1.1.1** and Gateway binaries
+with temporary state and sockets. It exercises the native Backend **save URL → verify
+→ confirm** flow, automatic pairing, authenticated empty catalog, actual Backend MCP
+tools, private discovery, administrator/member tool differences, domain data isolation,
+service-only readiness observations, restart identity, bounded outage reuse, account
+disable, registry removal and absence of personal secrets from Gateway files/logs.
 
-Gateway and Yard use internal HTTPS `home.arpa` origins. Remote access uses
-Twingate; no public URL or Cloudflare Tunnel is required for them. Point 2
-includes actual homelab HTTPS configuration with the owner, not only code support.
-No homelab configuration or certificate installation has been performed at point 1.
-Deployment origins have no application prefixes such as `/apps/name`.
+The Backend's own existing MCP adapter supplies a real source in that acceptance.
+This does not make Backend/Yard a pilot design or hardcode them in Gateway routing.
+Generic SDK-based protocol test participants separately exercise colliding names,
+user separation, cancellation, dropped write responses, failed sources, cursor
+recovery, persistence failure and request limits. They are test fixtures only.
 
-The Backend retains authority for users, roles, API keys, registry and service
-grants. Products execute tools and enforce domain ownership. Personal API keys
-never reach products. Delegations reuse authority for at most five minutes,
-with the contract's expiry safety margin, invalidation and outage rules; idle
-multi-hour sessions do not repeat Google login. Persisted Gateway data grants
-no authorization after restart.
+`sh scripts/check.sh` is the required local source/process check. The image check
+creates only disposable Docker containers/volumes. CI requires the actual Backend
+journey instead of silently skipping it, runs the minimum/stable Go and OS matrix,
+cross-compiles both deployment architectures, and validates the packaged image.
+The release workflow depends on that CI before publication.
 
-## Point 1 completion and verification
+The original point-1 checks (signals, crash recovery, exclusive state, persistent
+identity and sanitized logs) remain part of the required suite. Optional CA-helper
+tests remain separate from service trust. No installed Backend/Yard data, homelab
+proxy configuration or system trust store is changed by these checks.
 
-Implemented executable `cmd/nox-gateway`, SDK pin without local replacements,
-validated settings, JSON lifecycle logs and static/sanitized failure messages.
-Only local diagnostics are mounted. `/healthz` is liveness; `/readyz` remains
-503 until the implemented Gateway can actually admit integrated traffic.
+The complete installed Suite journey awaits Yard/product/CLI adaptation and point 12.
 
-Local storage contains only the persistent discovery identity and OS-held
-process lock. Atomic identity creation, strict bounded parsing, private modes,
-restart preservation and failure without regeneration are covered. Service
-credentials, registry persistence and discovery/authorization caches follow
-their own implementation points.
+## Verification recorded on November 2, 2026
 
-Required local validation is `sh scripts/check.sh`: configuration/error
-redaction, strict/corrupt identity handling, permission/symlink/lock checks,
-HTTP method and readiness semantics, active cancellation, bounded drain,
-executable signals, crash/restart identity recovery, and no request-secret logs.
-CI repeats this on Linux/macOS; deployment targets cross-compile for Linux
-amd64/arm64. Remote CI, packaging and installed integration are distinct evidence.
+- `sh scripts/check.sh`: passed on macOS arm64 with Go 1.27.3 (format, dependency
+  lock/module verification, vet/race tests, release tooling, optional CA helper,
+  binary lifecycle/signal/crash-recovery smoke).
+- Go 1.26.0: full race/vet checks passed; subsequently changed Gateway/trust/command
+  layers were checked again. Linux amd64 and arm64 cross-compilation passed.
+- Required actual Backend acceptance passed with Backend source at
+  `4a4b72b4c3a1cfb85c581f42bb3351d8a4880cea` (v1.1.1), including service probes and
+  removal while discovery was active. Only idempotent discovery convergence is
+  retried by the harness; business calls are never retried.
+- Final local image/recreation checks, both Compose configurations, local document
+  links, `git diff --check` and `actionlint 1.7.7` passed.
 
-Local results on **2026-11-01**:
-
-- Full `scripts/check.sh` passed on macOS arm64 with Go **1.27.3** and **1.26.0**:
-  formatting, unchanged dependency lock, module verification, vet, 13 top-level
-  race tests with table/subtest coverage, binary build and real process smoke.
-- The binary smoke passed SIGTERM/SIGINT shutdown, SIGKILL recovery, unchanged
-  identity after restart, exclusion of a concurrent second process, expected
-  HTTP health/readiness responses, and absence of request secrets from logs.
-- Linux **amd64** and **arm64** builds passed with Go 1.26.0 and CGO disabled.
-  These are cross-compilation checks, not claims of Linux runtime execution.
-- `actionlint` **1.7.7** accepted the workflow; Python syntax and local document
-  links were checked. Remote GitHub CI has not been run from this local repo.
-
-No installed Backend/Yard data, homelab proxy configuration, or certificates
-were changed. Point 1 ends here; point 2 awaits the owner's OK.
-
-## Subsequent acceptance
-
-Each point records the concrete behavior delivered, commands executed and any
-remaining external validation before stopping. Step 8 must exercise the actual
-implemented Gateway against Backend over trusted HTTPS; protocol participants
-must be identified as test fixtures, not invented Suite products or claims that
-unadapted products already work. Adaptations of Yard/other products, CLI and
-Portal are separate scopes under the same approved contracts.
-
-## Point 2 operator workflow clarification
-
-The approved delivery uses deployment-provided TLS. Gateway remains provider- and
-environment-independent; automatic Suite-wide certificate management is deferred
-as separate future product work. The optional home.arpa helper is an example
-operator tool, not a runtime requirement or built-in CA. Follow
-[HTTPS setup and cleanup](https-setup.md) for isolated files, renewal, proxy/client
-trust and complete removal. The owner paused before executing earlier setup
-commands; no real homelab CA has been reported as created or trusted yet.
-
-Local checks have exercised real Gateway/Backend HTTPS pairing, credential
-rotation, restart and revocation against Backend v1.0.15 with disposable state.
-These results do not mark point 2 complete: the homelab ingress, CA/client trust
-and installed pairing still need owner-assisted validation.
+These results complete local implementation/verification for correction points
+6 + 9. GitHub CI, image publication and the owner's installed Gateway check are
+still required delivery evidence. No release, commit, tag, push or homelab deployment
+was performed by the agent; temporary acceptance containers/volumes are removed.

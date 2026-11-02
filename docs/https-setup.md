@@ -1,33 +1,20 @@
-# HTTPS deployment and reversible local certificate setup
+# Optional native HTTPS and reversible certificate helper
 
-Gateway consumes deployment-provided TLS. It does not operate a certificate
-authority, install root certificates, configure DNS, or manage a reverse proxy.
-Any installation can use its own valid HTTPS origins, private/public CA, or an
-explicitly provisioned Backend SPKI pin. `home.arpa` is an example of an internal
-DNS deployment, not a Gateway domain restriction. No public Internet exposure or
-Cloudflare Tunnel is required for internal HTTPS.
+Suite pairing and service communication use the same-host local channel. **No
+certificate setup is required for integration.** This page is only for an operator
+who independently wants HTTPS on native browser/client addresses. See the main
+[README](../README.md) for normal installation and automatic Backend setup.
 
-## Choose a transport boundary
+Gateway does not manage DNS, a reverse proxy or a certificate authority. Native
+HTTPS can terminate at an existing proxy forwarding HTTP to the Gateway's published
+port, with `NOX_GATEWAY_PUBLIC_URL` set to its external HTTPS origin for browser
+Origin validation. Forwarded headers do not establish Suite service trust.
 
-- **Direct TLS:** configure `NOX_GATEWAY_PUBLIC_URL`, `NOX_GATEWAY_TLS_CERT_FILE`
-  and `NOX_GATEWAY_TLS_KEY_FILE`. Mount the leaf certificate/chain and its private
-  key; the key must be a regular owner-private file (0600/0400). The certificate
-  must be valid for the configured hostname. Same-key renewal is reloaded on new
-  TLS handshakes; a new key requires explicit trust reconciliation.
-- **TLS reverse proxy:** configure the HTTPS public origin, exact trusted
-  immediate proxy IPs in `NOX_GATEWAY_TRUSTED_PROXY_CIDRS`, and the actual external
-  leaf certificate in `NOX_GATEWAY_PUBLIC_TLS_CERT_FILE`. The proxy terminates TLS
-  and overwrites `X-Forwarded-Proto` with its verified scheme. Restrict the
-  plaintext internal hop to the trusted boundary. A client-supplied header or
-  a private IP alone never establishes HTTPS trust.
-
-For outgoing Backend communication, set its canonical HTTPS origin in
-`NOX_GATEWAY_BACKEND_URL`, explicitly approved networks/ports in
-`NOX_GATEWAY_SUITE_ALLOWED_CIDRS` and `NOX_GATEWAY_SUITE_ALLOWED_PORTS`, and an extra
-CA bundle with `NOX_GATEWAY_TLS_CA_FILE` when needed. An administrator-provisioned
-`NOX_GATEWAY_BACKEND_TLS_PIN` is an alternative explicit SPKI trust mode. It is
-not an automatic fallback after failed PKI validation. Redirects and environment
-HTTP proxies are rejected/ignored for credential-bearing requests.
+Alternatively configure direct native TLS with `NOX_GATEWAY_PUBLIC_URL`,
+`NOX_GATEWAY_TLS_CERT_FILE` and `NOX_GATEWAY_TLS_KEY_FILE`. Keep the private key 0600
+or 0400. The certificate must match the configured hostname. Same-key renewal is
+reloaded at handshake; a new key requires an explicit Gateway restart. This native
+certificate is not part of the local pairing binding.
 
 ## Optional portable certificate helper
 
@@ -58,7 +45,7 @@ python3 /path/to/your-folder/homelab-ca.py --name other --dns-name service.inter
 
 DNS names are configurable and are not restricted to home.arpa. This helper
 accepts DNS names, not IP SANs. The Gateway independently accepts any contract-valid
-HTTPS origin and certificates supplied by other tools or authorities.
+native HTTP/HTTPS origin and certificates supplied by other tools or authorities.
 
 The script always writes **beside its own physical file**, even when launched
 from another working directory. Temporary OpenSSL files are also created there
@@ -130,8 +117,8 @@ NPM and the client's trust store now contain their managed copies.
 Run the same script again and accept the saved names (Enter). It automatically
 uses the saved passphrase and preserves the CA/server keys, then issues a fresh
 90-day certificate. Re-import the renewed certificate into the same NPM entry
-and update any Gateway public-certificate copy/mount. Same-key renewal preserves
-the SPKI pin. The script does not install a scheduled renewal or notification job.
+and update any direct native Gateway certificate mount. Same-key renewal preserves
+the current native TLS key. The script does not install a scheduled renewal or notification job.
 
 To inspect the current certificate without renewing:
 
@@ -143,26 +130,6 @@ python3 /path/to/your-folder/homelab-ca.py --check
 due. Add `--name other` for another named certificate set. Keep the folder while
 its certificates are in use: it contains the authority needed for later renewals.
 
-## Backend trust boundary and pairing follow HTTPS
-
-HTTPS accepted by a browser is one deployment check. Backend Suite routes also
-require their configured trusted ingress, approved outgoing targets and canonical
-origin; a padlock alone does not complete this configuration. Inspect the actual
-immediate proxy peer rather than trusting an entire Docker subnet by assumption.
-Keep native/direct product access and existing data intact.
-
-Once HTTPS and the Backend boundary are verified, export the administrator's
-Gateway pairing intent to a private file and configure `NOX_GATEWAY_PAIRING_FILE`.
-The executable persists its proof/operation keys before sending and stores the
-issued service credential before acknowledging. The CA root and Backend's
-Suite signing keys have separate purposes. Browser trust does not replace
-Backend service trust or authenticate an MCP call.
-
-The configured Backend origin must agree with its provisioning response and
-`NOX_BACKEND_PUBLIC_URL`. Review the existing Google OAuth callback before
-changing that setting; the callback must remain authorized by Google. HTTPS setup
-and pairing are not yet certification of registry/aggregation/execution points.
-
 ## Removal and cleanup
 
 Folder deletion alone does not remove installed certificate trust. To undo this
@@ -173,9 +140,8 @@ setup completely:
    proxy hosts/DNS entries if they were only for this setup.
 2. Remove the specific imported root certificate from each client's trust store,
    including the login keychain on every Mac where it was imported.
-3. If a Gateway was paired, revoke its service association in Backend and stop
-   it before removing its private state. Deleting local state does not revoke a
-   Backend credential or unregister a product.
+3. Removing optional native HTTPS does not require unpairing Gateway or deleting
+   its state. Restore its HTTP native URL in Backend configuration if it changed.
 4. Delete the private issuing directory only after retiring the certificates it
    issued; remove any remaining browser import folder and transferred helper
    copy. Existing NPM/Backend containers and their unrelated volumes remain.

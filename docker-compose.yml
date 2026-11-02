@@ -1,0 +1,23 @@
+name: nox-gateway
+services:
+  gateway:
+    image: ghcr.io/mapherez/nox-gateway:${NOX_GATEWAY_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${NOX_GATEWAY_PORT:-5711}:8080"
+    environment:
+      NOX_GATEWAY_PUBLIC_URL: "${NOX_GATEWAY_PUBLIC_URL:-}"
+      NOX_GATEWAY_LOG_LEVEL: "${NOX_GATEWAY_LOG_LEVEL:-info}"
+      NOX_GATEWAY_CALL_TIMEOUT_MS: "${NOX_GATEWAY_CALL_TIMEOUT_MS:-20000}"
+      NOX_GATEWAY_PROBE_INTERVAL_MS: "${NOX_GATEWAY_PROBE_INTERVAL_MS:-15000}"
+      NOX_GATEWAY_MAX_CONCURRENT: "${NOX_GATEWAY_MAX_CONCURRENT:-32}"
+      NOX_GATEWAY_MAX_PAYLOAD_BYTES: "${NOX_GATEWAY_MAX_PAYLOAD_BYTES:-2097152}"
+    volumes:
+      - gateway-data:/data
+      - nox-suite-local:/run/nox-suite
+volumes:
+  gateway-data:
+    name: "${NOX_GATEWAY_DATA_VOLUME_NAME:-nox-gateway-data}"
+  nox-suite-local:
+    name: "${NOX_SUITE_LOCAL_VOLUME_NAME:-nox-suite-local}"
+    driver: local

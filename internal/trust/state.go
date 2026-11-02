@@ -18,7 +18,7 @@ import (
 
 var (
 	ErrRecovery = errors.New("service trust requires explicit recovery or a new administrator-authorized pairing")
-	ErrBinding  = errors.New("service trust does not match the configured Backend, Gateway origin, or TLS key")
+	ErrBinding  = errors.New("service trust does not match the configured same-host Backend and Gateway binding")
 	ErrResponse = errors.New("Backend provisioning or trust response failed validation")
 	ErrClock    = errors.New("clock moved backwards; synchronize the clock before using service trust")
 )
@@ -36,10 +36,11 @@ type KeySet struct {
 }
 
 type Binding struct {
-	Denied              bool                     `json:"denied"`
-	PublicURL           string                   `json:"publicUrl"`
-	TLSFingerprint      string                   `json:"tlsFingerprint"`
-	BackendPin          string                   `json:"backendPin"`
+	Denied    bool   `json:"denied"`
+	PublicURL string `json:"publicUrl"`
+	// Legacy network bindings are retained only to reject silent conversion.
+	TLSFingerprint      string                   `json:"tlsFingerprint,omitempty"`
+	BackendPin          string                   `json:"backendPin,omitempty"`
 	Provisioning        noxmcp.SuiteProvisioning `json:"provisioning"`
 	AssociationRevision string                   `json:"associationRevision"`
 	SigningKeys         KeySet                   `json:"signingKeys"`
@@ -51,7 +52,7 @@ func (b Binding) GoString() string { return b.String() }
 
 type Operation struct {
 	BackendOrigin string                    `json:"backendOrigin"`
-	BackendPin    string                    `json:"backendPin"`
+	BackendPin    string                    `json:"backendPin,omitempty"`
 	Kind          string                    `json:"kind"`
 	RequestKey    string                    `json:"requestKey"`
 	AckKey        string                    `json:"ackKey"`

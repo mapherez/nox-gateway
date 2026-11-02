@@ -40,10 +40,14 @@ func (c *Client) Close() { c.transport.Close() }
 // Request never returns/logs untrusted response error text or raw network errors.
 // Callers durably journal every mutation key/body before sending it.
 func (c *Client) Request(ctx context.Context, method, path, token, key, revision string, body any) ([]byte, int, error) {
-	if !strings.HasPrefix(path, "/api/nox/") || strings.ContainsAny(path, "?#\r\n") || strings.ContainsAny(token, "\r\n") {
+	if !strings.HasPrefix(path, "/api/nox/") || strings.ContainsAny(path, "#\r\n") || strings.ContainsAny(token, "\r\n") {
 		return nil, 0, &Failure{Code: "INVALID_BACKEND_REQUEST"}
 	}
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	budget := 20 * time.Second
+	if strings.HasPrefix(path, "/api/nox/events?") {
+		budget = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	select {
 	case c.slots <- struct{}{}:
@@ -100,6 +104,9 @@ func (c *Client) Request(ctx context.Context, method, path, token, key, revision
 	}
 	if response.StatusCode >= 500 || response.StatusCode == 408 || response.StatusCode == 429 {
 		return nil, response.StatusCode, &Failure{Code: "BACKEND_UNAVAILABLE", Retryable: true}
+	}
+	if response.StatusCode == 410 {
+		return nil, 410, &Failure{Code: "CURSOR_EXPIRED"}
 	}
 	if response.StatusCode >= 300 {
 		return nil, response.StatusCode, &Failure{Code: "BACKEND_OPERATION_REJECTED"}

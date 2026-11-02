@@ -93,7 +93,7 @@ def main():
                 status, body = request(gateway.address, "/readyz")
                 require(status == 503 and body["code"] == "GATEWAY_NOT_CONFIGURED", "Unconfigured Gateway claimed readiness")
                 status, body = request(gateway.address, "/mcp?api_key=SMOKE_QUERY_SECRET")
-                require(status == 404 and body["code"] == "NOT_FOUND", "Unimplemented MCP endpoint is exposed")
+                require(status == 400 and body["code"] == "INVALID_REQUEST", "Gateway accepted credentials in the query string")
                 if index == 0:
                     second = subprocess.run([str(binary)], env=env, capture_output=True, text=True, timeout=5)
                     require(second.returncode != 0 and "already in use" in second.stderr, "Second process acquired live state")

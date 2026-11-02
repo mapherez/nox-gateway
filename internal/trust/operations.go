@@ -15,6 +15,8 @@ import (
 // Operate is an explicit offline maintenance command: the daemon must release
 // its data-directory lock first. No secret is accepted through command arguments.
 func (e *Engine) Operate(ctx context.Context, kind string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if kind != "rotate" && kind != "revoke-credential" && kind != "revoke-service" {
 		return ErrRecovery
 	}
@@ -22,7 +24,7 @@ func (e *Engine) Operate(ctx context.Context, kind string) error {
 		if e.doc.Pending.Kind != kind {
 			return ErrRecovery
 		}
-		return e.Reconcile(ctx)
+		return e.reconcile(ctx)
 	}
 	if e.doc.Binding == nil || e.doc.Binding.Revoked {
 		return ErrRecovery
@@ -35,11 +37,12 @@ func (e *Engine) Operate(ctx context.Context, kind string) error {
 	if kind == "revoke-service" {
 		revision = view.Revision
 	}
-	e.doc.Pending = &Operation{BackendOrigin: e.cfg.BackendURL, BackendPin: e.cfg.BackendTLSPin, ExpiresAt: time.Now().Add(5 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z"), Kind: kind, RequestKey: rand.Text(), AckKey: rand.Text(), Revision: revision}
+	e.authority.Store(nil)
+	e.doc.Pending = &Operation{BackendOrigin: e.cfg.BackendURL, ExpiresAt: time.Now().Add(5 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z"), Kind: kind, RequestKey: rand.Text(), AckKey: rand.Text(), Revision: revision}
 	if err = e.save(); err != nil {
 		return err
 	}
-	return e.Reconcile(ctx)
+	return e.reconcile(ctx)
 }
 
 func (e *Engine) completeRotation(ctx context.Context) error {
@@ -90,7 +93,7 @@ func (e *Engine) completeRotation(ctx context.Context) error {
 		return err
 	}
 	e.logger.Info("gateway_credential_rotated")
-	return e.Reconcile(ctx)
+	return e.reconcile(ctx)
 }
 
 func (e *Engine) completeRevocation(ctx context.Context) error {

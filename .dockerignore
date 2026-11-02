@@ -1,0 +1,10 @@
+# Send only Go build inputs. Local state and optional certificate-helper outputs
+# must never enter a Docker build context.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!Dockerfile

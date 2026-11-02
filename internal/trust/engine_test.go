@@ -13,11 +13,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,22 +60,29 @@ func fixture(t *testing.T) *authorityFixture {
 		t.Fatal(err)
 	}
 	f := &authorityFixture{secret: secret, ackKeys: map[string]string{}}
-	f.intent = noxmcp.SuitePairingIntent{ContractVersion: "1.0", PairingID: "pairing_test", ProductID: "nox-gateway", Purpose: "gateway", BaseUrl: "https://gateway.home.arpa", Nonce: base64.RawURLEncoding.EncodeToString(secret), Secret: base64.RawURLEncoding.EncodeToString(secret), ExpiresAt: time.Now().Add(10 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")}
+	f.intent = noxmcp.SuitePairingIntent{ContractVersion: "1.0", PairingID: "pairing_test", ProductID: "nox-gateway", Purpose: "gateway", BaseUrl: "http://nox-gateway", Nonce: base64.RawURLEncoding.EncodeToString(secret), Secret: base64.RawURLEncoding.EncodeToString(secret), ExpiresAt: time.Now().Add(10 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")}
 	expiry := f.intent.ExpiresAt
 	f.provision = noxmcp.SuiteProvisioning{ContractVersion: "1.0", PairingID: f.intent.PairingID, Issuer: "urn:nox:backend:test-authority", ServiceCredential: "noxsvc_" + base64.RawURLEncoding.EncodeToString(secret), Service: noxmcp.SuiteServiceIdentity{ContractVersion: "1.0", ProductID: "nox-gateway", ServiceID: "service_test", AssociationID: "association_test", CredentialID: "credential_test", CredentialRevision: "credential_revision_test", Grants: []string{"registry.read", "authorization.delegate", "events.read", "mcp.report", "mcp.probe"}, ExpiresAt: &expiry}}
-	f.server = httptest.NewTLSServer(http.HandlerFunc(f.handle))
+	local, err := os.MkdirTemp("", "ng-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(local) })
+	listener, cleanup, err := transport.Listen(local, "nox-backend")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cleanup)
+	f.server = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
+	f.server.Listener.Close()
+	f.server.Listener = listener
+	f.server.Start()
+	f.server.URL = "http://nox-backend"
 	t.Cleanup(f.server.Close)
 	f.provision.BackendOrigin = f.server.URL
 	f.provision.SigningKeysUri = f.server.URL + "/api/nox/keys"
-	u, _ := url.Parse(f.server.URL)
-	port, _ := strconv.ParseUint(u.Port(), 10, 16)
 	f.dir = filepath.Join(t.TempDir(), "state")
-	file := filepath.Join(t.TempDir(), "pairing.json")
-	raw, _ := json.Marshal(f.intent)
-	if err := os.WriteFile(file, raw, 0600); err != nil {
-		t.Fatal(err)
-	}
-	f.config = config.Config{BackendURL: f.server.URL, PublicURL: f.intent.BaseUrl, BackendTLSPin: transport.SPKI(f.server.Certificate()), AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}, AllowedPorts: []uint16{uint16(port)}, PairingFile: file}
+	f.config = config.Config{BackendURL: "http://nox-backend", SocketDir: local}
 	return f
 }
 
@@ -234,8 +238,11 @@ func (f *authorityFixture) open(t *testing.T, store Store) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := New(f.config, store, declaration, strings.Repeat("A", 43), slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	e, err := New(f.config, store, declaration, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.prepareIntent(f.intent); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(e.Close)
@@ -439,12 +446,18 @@ func TestRevocationAndBackendOutageDoNotEraseOrReviveAuthority(t *testing.T) {
 	if err := e.Reconcile(t.Context()); err == nil || e.Status() != "backendUnavailable" || e.doc.Binding.Revoked {
 		t.Fatal("outage was treated as revocation or success")
 	}
+	if _, _, err := e.Authority(); err != nil {
+		t.Fatal("outage erased process-verified authority")
+	}
 	f.mu.Lock()
 	f.unavailable = false
 	f.revoked = true
 	f.mu.Unlock()
 	if err := e.Reconcile(t.Context()); err == nil || e.Status() != "authorizationDenied" || !e.doc.Binding.Denied {
 		t.Fatal("explicit denial did not invalidate local service access")
+	}
+	if _, _, err := e.Authority(); err == nil {
+		t.Fatal("denial left usable authority")
 	}
 	e.Close()
 	store.Close()
@@ -463,21 +476,16 @@ func TestPendingOperationCannotChangeBackendOrTLSBinding(t *testing.T) {
 	e := f.open(t, store)
 	e.Close()
 	declaration, _ := app.Declaration("test-build")
-	for _, change := range []string{"backend", "pin", "own-key", "declaration"} {
+	for _, change := range []string{"backend", "declaration"} {
 		c := f.config
-		pin := strings.Repeat("A", 43)
 		decl := declaration
 		switch change {
 		case "backend":
 			c.BackendURL = "https://different.home.arpa"
-		case "pin":
-			c.BackendTLSPin = strings.Repeat("B", 43)
-		case "own-key":
-			pin = strings.Repeat("B", 43)
 		case "declaration":
 			decl, _ = app.Declaration("changed-build")
 		}
-		other, err := New(c, store, decl, pin, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+		other, err := New(c, store, decl, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 		if other != nil {
 			other.Close()
 		}
@@ -542,5 +550,29 @@ func TestClockRollbackBlocksManagementBeforeDispatch(t *testing.T) {
 	complete, acks, _ := f.counts()
 	if complete != 0 || acks != 0 {
 		t.Fatal("rollback reached the Backend")
+	}
+}
+
+func TestVerifiedAuthorityDoesNotWaitForReconciliationLock(t *testing.T) {
+	f := fixture(t)
+	e := f.open(t, f.store(t))
+	if err := e.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// Network reconciliation owns this lock. Cached, verified authority must
+	// remain readable so a slow Backend cannot stall all unrelated requests.
+	e.mu.Lock()
+	done := make(chan error, 1)
+	go func() { _, _, err := e.Authority(); done <- err }()
+	select {
+	case err := <-done:
+		e.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		e.mu.Unlock()
+		<-done
+		t.Fatal("authority read waited for network reconciliation")
 	}
 }

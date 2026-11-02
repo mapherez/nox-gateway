@@ -1,130 +1,98 @@
+// Package transport carries Suite service traffic exclusively over same-host sockets.
 package transport
 
 import (
 	"context"
-	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
-	"strconv"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mapherez/nox-gateway/internal/config"
-	"github.com/mapherez/nox-gateway/internal/securefile"
+	noxmcp "github.com/mapherez/nox-mcp/go"
 )
 
-var (
-	ErrTarget   = errors.New("target is outside the approved origin, ports, or IP networks")
-	ErrRedirect = errors.New("credential-bearing requests cannot follow redirects")
-)
+var ErrUnavailable = errors.New("local Suite participant is unavailable")
+var ErrTarget = errors.New("target is not a canonical same-host Suite participant")
+var ErrRedirect = errors.New("Suite redirects are not followed")
 
-type Client struct {
-	HTTP     *http.Client
-	origin   *url.URL
-	networks []netip.Prefix
-	ports    []uint16
-	resolve  func(context.Context, string, string) ([]netip.Addr, error)
-	dial     func(context.Context, string, string) (net.Conn, error)
-}
+type Client struct{ HTTP *http.Client }
 
-func NewClient(c config.Config) (*Client, error) {
-	origin, err := url.Parse(c.BackendURL)
-	if err != nil || origin.Scheme != "https" || origin.Hostname() == "" || len(c.AllowedCIDRs) == 0 {
-		return nil, ErrTarget
-	}
-	pool, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, ErrTLS
-	}
-	if c.TLSCAFile != "" {
-		b, err := securefile.Read(c.TLSCAFile, false, 256<<10)
-		if err != nil {
-			return nil, err
-		}
-		if !pool.AppendCertsFromPEM(b) {
-			return nil, ErrTLS
-		}
-	}
-	out := &Client{origin: origin, networks: append([]netip.Prefix(nil), c.AllowedCIDRs...), ports: append([]uint16(nil), c.AllowedPorts...), resolve: net.DefaultResolver.LookupNetIP, dial: (&net.Dialer{Timeout: 3 * time.Second, KeepAlive: 30 * time.Second}).DialContext}
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
-	if c.BackendTLSPin != "" {
-		// Explicit administrator-provisioned SPKI mode replaces PKI validation, never
-		// a fallback. The peer key and certificate lifetime are always verified.
-		tlsConfig.InsecureSkipVerify = true
-		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || !validNow(cs.PeerCertificates[0]) || subtle.ConstantTimeCompare([]byte(SPKI(cs.PeerCertificates[0])), []byte(c.BackendTLSPin)) != 1 {
-				return ErrTLS
-			}
-			return nil
-		}
-	}
-	transport := &http.Transport{
-		Proxy: nil, DialContext: out.dialTarget, TLSClientConfig: tlsConfig,
-		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 3 * time.Second,
-		IdleConnTimeout: 60 * time.Second, MaxIdleConns: 8, MaxIdleConnsPerHost: 8,
-		MaxConnsPerHost: 8, MaxResponseHeaderBytes: 32 << 10,
-	}
-	out.HTTP = &http.Client{Transport: transport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return ErrRedirect }}
-	return out, nil
-}
-
-func (c *Client) Close() { c.HTTP.CloseIdleConnections() }
-
-func (c *Client) dialTarget(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	expectedPort := c.origin.Port()
-	if expectedPort == "" {
-		expectedPort = "443"
-	}
-	if err != nil || host != c.origin.Hostname() || port != expectedPort {
-		return nil, ErrTarget
-	}
-	n, err := strconv.ParseUint(port, 10, 16)
-	if err != nil {
-		return nil, ErrTarget
-	}
-	approved := false
-	for _, p := range c.ports {
-		if uint16(n) == p {
-			approved = true
+func Origin(id string) string {
+	host := id
+	numeric := id != ""
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			numeric = false
 			break
 		}
 	}
-	if !approved {
-		return nil, ErrTarget
-	}
-	lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	ips, err := c.resolve(lookup, "ip", host)
-	if err != nil || len(ips) == 0 {
-		return nil, ErrTarget
-	}
-	// Check every result before attempting any connection; DNS changes are
-	// re-evaluated for each new connection, then dial the actual approved IP.
-	for _, ip := range ips {
-		allowed := false
-		for _, p := range c.networks {
-			if p.Contains(ip.Unmap()) {
-				allowed = true
-				break
-			}
+	if len(id) > 63 || numeric {
+		if len(id) > 32 {
+			host = id[:32] + "." + id[32:]
 		}
-		if !allowed || ip.Zone() != "" {
+		host += ".nox-suite"
+	}
+	return "http://" + host
+}
+func Directory(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return ErrTarget
+	}
+	st, err := os.Lstat(dir)
+	if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 || st.Mode().Perm()&7 != 0 {
+		return ErrTarget
+	}
+	return nil
+}
+func Socket(dir, origin string) (string, error) {
+	normalized, err := noxmcp.NormalizeSuiteOrigin(origin)
+	if err != nil || normalized != origin {
+		return "", ErrTarget
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" || u.Port() != "" {
+		return "", ErrTarget
+	}
+	id := u.Host
+	if strings.HasSuffix(id, ".nox-suite") {
+		id = strings.ReplaceAll(strings.TrimSuffix(id, ".nox-suite"), ".", "")
+	}
+	if !noxmcp.ValidSuiteProductID(id) || Origin(id) != origin {
+		return "", ErrTarget
+	}
+	if err = Directory(dir); err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, id+".sock"), nil
+}
+func NewLocal(dir, origin string) (*Client, error) {
+	path, err := Socket(dir, origin)
+	if err != nil {
+		return nil, err
+	}
+	tr := &http.Transport{Proxy: nil, DisableKeepAlives: true, MaxConnsPerHost: 32, MaxResponseHeaderBytes: 32 << 10}
+	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != strings.TrimPrefix(origin, "http://")+":80" {
 			return nil, ErrTarget
 		}
-	}
-	for _, ip := range ips {
-		conn, e := c.dial(ctx, network, net.JoinHostPort(ip.String(), port))
-		if e == nil {
-			return conn, nil
+		if err := Directory(dir); err != nil {
+			return nil, err
 		}
-		if ctx.Err() != nil {
-			break
+		st, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrUnavailable
 		}
+		if err != nil || st.Mode()&os.ModeSocket == 0 {
+			return nil, ErrTarget
+		}
+		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "unix", path)
 	}
-	return nil, errors.New("approved target is unavailable")
+	return &Client{HTTP: &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return ErrRedirect }}}, nil
 }
+func NewClient(c config.Config) (*Client, error) { return NewLocal(c.SocketDir, "http://nox-backend") }
+func (c *Client) Close()                         { c.HTTP.CloseIdleConnections() }

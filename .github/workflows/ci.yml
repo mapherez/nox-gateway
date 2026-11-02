@@ -5,6 +5,7 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -30,6 +31,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -48,7 +53,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=readonly -trimpath -o bin/nox-gateway-linux-arm64 ./cmd/nox-gateway
 
   backend-integration:
-    name: Actual Backend / HTTPS service trust
+    name: Actual Backend / local pairing and MCP
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Gateway
@@ -57,9 +62,13 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           repository: mapherez/nox-backend
-          ref: 577f46175ada6dc0742925329d6dbc444c548b44 # v1.0.15
+          ref: 4a4b72b4c3a1cfb85c581f42bb3351d8a4880cea # v1.1.1
           path: .integration/nox-backend
           persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -76,8 +85,20 @@ jobs:
       - name: Build actual Backend
         working-directory: .integration/nox-backend/backend
         run: go build -mod=readonly -trimpath -o "$RUNNER_TEMP/nox-backend" ./cmd/nox-backend
-      - name: Require actual pairing, rotation, restart and revocation
+      - name: Require automatic pairing, private MCP, restart and invalidation
         env:
           NOX_GATEWAY_TEST_BACKEND_BINARY: ${{ runner.temp }}/nox-backend
           NOX_GATEWAY_TEST_GATEWAY_BINARY: ${{ runner.temp }}/nox-gateway
         run: go test -race -mod=readonly -count=1 -v ./internal/acceptance
+
+  image:
+    name: Packaged Gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - run: docker build --build-arg VERSION=ci-validation -t nox-gateway:ci .
+      - run: python3 scripts/check-image.py --image nox-gateway:ci --version ci-validation
+      - run: docker compose -f docker-compose.yml config --quiet && docker compose -f docker-compose.dev.yml config --quiet
