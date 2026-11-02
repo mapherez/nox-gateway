@@ -16,3 +16,8 @@ __pycache__/
 *.p12
 *.pfx
 /pairing*.json
+
+# Keep accidental source-folder certificate-helper outputs out of Git.
+/scripts/ca/
+/scripts/certificates/
+/scripts/COMO-USAR-CERTIFICADOS.md

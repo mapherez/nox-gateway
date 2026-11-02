@@ -29,48 +29,73 @@ CA bundle with `NOX_GATEWAY_TLS_CA_FILE` when needed. An administrator-provision
 not an automatic fallback after failed PKI validation. Redirects and environment
 HTTP proxies are rejected/ignored for credential-bearing requests.
 
-## Optional home.arpa certificate helper
+## Optional portable certificate helper
 
-`scripts/homelab-ca.py` is optional deployment tooling using existing local
-OpenSSL/LibreSSL and Python, independent of the Gateway executable. It creates
-an encrypted root private key, root certificate and named leaf outputs. It
-supports only internal `home.arpa` issuance; the Gateway itself accepts any
-contract-valid configured HTTPS origin and certificates from other tools/CAs.
-No additional application or permanent CA service is installed by the helper.
+`scripts/homelab-ca.py` is a **standalone file** using existing Python 3.9+ and
+OpenSSL/LibreSSL on macOS/Linux. Copy only that file into the folder where you
+want to keep the CA and certificates, outside Git repositories. The folder must
+already exist; the script never creates or changes permissions on the base folder.
 
-Pick **one private directory outside every Git repository**, for example
-`~/nox-suite-tls`. Keep the helper and CA data there on the issuing host. With
-`homelab-ca.py` already copied into that directory:
+Run the copied script with one command:
 
 ```sh
-python3 ~/nox-suite-tls/homelab-ca.py --directory ~/nox-suite-tls/ca init
-python3 ~/nox-suite-tls/homelab-ca.py --directory ~/nox-suite-tls/ca issue --name home-arpa --dns-name '*.home.arpa'
+python3 /path/to/your-folder/homelab-ca.py
 ```
 
-Enter a passphrase of at least 12 characters interactively and keep it in your
-own password manager. Never send it in chat, put it in command arguments, or
-upload the root private key to a proxy. `init` refuses to overwrite an existing
-CA. If an earlier setup exists, reuse its CA and original leaf key rather than
-creating a duplicate.
+It asks only for DNS names, for example `*.home.arpa` or a comma-separated list.
+Enter accepts the displayed default: `*.home.arpa` initially, or the saved names
+on later runs. It automatically creates a strong random passphrase, an encrypted
+CA key, the CA certificate, the server key/certificate, and a usage/cleanup guide.
+The passphrase is saved in a private file and is not printed or put in process
+arguments. No package, service, system trust entry, DNS or proxy setup is installed.
 
-The resulting directory is:
+For unattended use, or another separately named certificate set:
+
+```sh
+python3 /path/to/your-folder/homelab-ca.py --dns-name '*.home.arpa'
+python3 /path/to/your-folder/homelab-ca.py --name other --dns-name service.internal.example
+```
+
+DNS names are configurable and are not restricted to home.arpa. This helper
+accepts DNS names, not IP SANs. The Gateway independently accepts any contract-valid
+HTTPS origin and certificates supplied by other tools or authorities.
+
+The script always writes **beside its own physical file**, even when launched
+from another working directory. Temporary OpenSSL files are also created there
+and removed after each normal or failed run. An OS-held directory lock prevents
+simultaneous runs without leaving a lock file. No absolute paths are saved in the
+certificate-set metadata or generated instructions.
 
 ```text
-nox-suite-tls/
+your-folder/
   homelab-ca.py
-  ca/
-    root.key                     encrypted CA signing key; keep private
-    root.crt                     root certificate for client trust
-    issued/home-arpa/
-      key.pem                    private server key for the proxy
-      cert.pem                   server certificate
-      fullchain.pem              certificate plus root
+  COMO-USAR-CERTIFICADOS.md        generated import/renewal/cleanup instructions
+  ca/                            private subfolder (0700)
+    passphrase.txt               automatically generated secret (0600)
+    root.key                     encrypted CA signing key (0600)
+    root.crt                     CA certificate for client trust
+  certificates/server/           default certificate set, private subfolder
+    key.pem                      private server key (0600)
+    cert.pem                     certificate for the proxy
+    fullchain.pem                certificate plus root
+    details.json                 DNS names, relative/portable state
 ```
 
+Existing CA material and server keys are reused on reruns. Missing CA files,
+missing existing server keys, mismatched keys, unsafe secret permissions and
+symlinks cause an error without silently creating replacement authority.
+The generated passphrase and encrypted CA key live together: protect the entire
+folder. Only `root.crt` is installed on clients; only the server certificate/key
+are supplied to the proxy. Never upload `root.key` or `passphrase.txt` there.
+
+To continue using the **same CA on another machine, copy the entire folder**,
+preserving its private file permissions. Copying only the script creates a new
+CA and therefore requires establishing client trust in that new CA.
+
 `*.home.arpa` covers names such as `gateway.home.arpa` and `yard.home.arpa`,
-but not the bare `home.arpa` or names with multiple labels such as
-`api.gateway.home.arpa`. Supply separate `--dns-name` arguments if needed.
-The CA certificate lasts ten years; leaf certificates last **90 days**.
+but not bare `home.arpa` or names with multiple labels such as
+`api.gateway.home.arpa`. Include additional names when needed. The root lasts ten
+years; server certificates last **90 days**.
 
 ## Nginx Proxy Manager and client trust
 
@@ -78,7 +103,7 @@ The CA certificate lasts ten years; leaf certificates last **90 days**.
    on the computer running the browser. Keep mode 0600 on `key.pem`. The root
    private key stays on the issuing host.
 2. In NPM, open **SSL Certificates → Add SSL Certificate → Custom**. Use a clear
-   name such as `Homelab home.arpa`; import `cert.pem` as Certificate and `key.pem`
+   name such as `Homelab home.arpa`; import `certificates/server/cert.pem` as Certificate and `certificates/server/key.pem`
    as Certificate Key. This CA signs leaves directly, so there is no intermediate
    certificate to import. NPM stores its own managed copy.
 3. Edit each intended Proxy Host, select that certificate under **SSL**, and
@@ -102,20 +127,21 @@ NPM and the client's trust store now contain their managed copies.
 
 ## Renewal
 
-The helper uses **manual renewal**. Run the same `issue` command before the
-90-day certificate expires; it reuses the existing `key.pem` so the SPKI pin does
-not change. Import the renewed certificate into the same NPM certificate entry
-and update any Gateway public-certificate file mount/copy. A root change is not
-needed for normal renewal.
+Run the same script again and accept the saved names (Enter). It automatically
+uses the saved passphrase and preserves the CA/server keys, then issues a fresh
+90-day certificate. Re-import the renewed certificate into the same NPM entry
+and update any Gateway public-certificate copy/mount. Same-key renewal preserves
+the SPKI pin. The script does not install a scheduled renewal or notification job.
+
+To inspect the current certificate without renewing:
 
 ```sh
-python3 ~/nox-suite-tls/homelab-ca.py --directory ~/nox-suite-tls/ca check --name home-arpa
+python3 /path/to/your-folder/homelab-ca.py --check
 ```
 
-`check` reports whether renewal is due within the next 30 days and returns a
-nonzero exit status when due. There is no automatic renewal or notification
-service installed. Keep the issuer directory and passphrase while certificates
-are in use; they are deployment configuration needed for subsequent renewals.
+`--check` reports whether renewal is due within 30 days and returns nonzero when
+due. Add `--name other` for another named certificate set. Keep the folder while
+its certificates are in use: it contains the authority needed for later renewals.
 
 ## Backend trust boundary and pairing follow HTTPS
 
