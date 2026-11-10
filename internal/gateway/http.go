@@ -363,7 +363,8 @@ func (g *Gateway) dispatch(ctx context.Context, key, partition string, snapshot 
 	if current != generation || ctx.Err() != nil {
 		return nil, errors.New("AUTHORIZATION_INVALIDATED")
 	}
-	session, closeSession, e := g.connect(ctx, r, id, &controls)
+	wire := &callResponse{}
+	session, closeSession, e := g.connect(ctx, r, id, &controls, wire)
 	if e != nil {
 		return nil, e
 	}
@@ -389,7 +390,7 @@ func (g *Gateway) dispatch(ctx context.Context, key, partition string, snapshot 
 		}
 	}
 	result, e := session.CallTool(ctx, &mcp.CallToolParams{Name: route.ToolName, Arguments: params.Arguments, Meta: meta})
-	if e != nil {
+	if e != nil || wire.restore(result) != nil {
 		return nil, errors.New("EXECUTION_OUTCOME_UNCONFIRMED")
 	}
 	b, e := json.Marshal(result)
@@ -414,7 +415,7 @@ func callFailure(e error) *mcp.CallToolResult {
 		value["details"] = map[string]any{"outcome": "unknown"}
 	}
 	b, _ := json.Marshal(value)
-	return &mcp.CallToolResult{IsError: true, StructuredContent: value, Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
+	return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}
 }
 func requestID() string {
 	b := make([]byte, 16)

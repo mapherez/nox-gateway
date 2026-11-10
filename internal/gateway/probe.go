@@ -37,7 +37,7 @@ func (g *Gateway) probeAll(ctx context.Context) {
 			state := "unknown"
 			id, e := g.authorize(check, "", r, "probe")
 			if e == nil {
-				session, closeSession, e := g.connect(check, r, id, nil)
+				session, closeSession, e := g.connect(check, r, id, nil, nil)
 				if e != nil {
 					state = "unreachable"
 				} else {

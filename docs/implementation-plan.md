@@ -27,7 +27,7 @@ The optional certificate helper remains independent; it is not a setup requireme
 
 | Point | Gateway deliverable | Current implementation |
 | --- | --- | --- |
-| 1 | Go executable, SDK, configuration, persistent discovery identity, private/exclusive state, diagnostics, lifecycle, tests and CI. | Implemented; SDK upgraded to published 0.7.2. |
+| 1 | Go executable, SDK, configuration, persistent discovery identity, private/exclusive state, diagnostics, lifecycle, tests and CI. | Implemented; SDK upgraded to published 0.7.3. |
 | 2 | Secure Backend pairing, resumable provisioning, persisted credential before ACK, rotation/revocation, restart recovery and declaration. | Implemented over the shared local socket channel, delivered automatically from Backend configuration. No manual certificate/pairing file workflow. |
 | 3 | Backend snapshot, long-poll events, atomic persistence/invalidation, cursors/reconciliation, removal/replacement. | Implemented; cached registry is not authority on restart. |
 | 4 | Personal-key admission, verified product delegations, bounded private caches, expiry/renewal/revocation/outage behavior. | Implemented; explicit denial has no stale fallback. |
@@ -82,3 +82,48 @@ These results complete local implementation/verification for correction points
 6 + 9. GitHub CI, image publication and the owner's installed Gateway check are
 still required delivery evidence. No release, commit, tag, push or homelab deployment
 was performed by the agent; temporary acceptance containers/volumes are removed.
+
+
+## Gateway corrections verified on November 9, 2026
+
+This records correction point 2 of the current six-point audit follow-up. It does
+not renumber the earlier Suite correction sequence above or claim completion of
+Yard, CLI or the full installed Suite journey.
+
+- Upgraded the published NoX MCP dependency and checksum lock to 0.7.3.
+  Conventional `tools/list` excludes `_meta.cli`; canonical NoX definitions retain
+  paths, rich descriptors, translated references, policy and valid fingerprints.
+- Preserved exact JSON numbers in structured tool results and result metadata
+  before forwarding, including nested signed/unsigned 64-bit values. The bounded
+  wire result is matched to the outgoing call ID and held only for that dispatch.
+  Missing or unconfirmed results do not fall back to rounded SDK values.
+- Removed success `structuredContent` from Gateway-generated tool errors. Error
+  codes, non-retryable status and unknown execution outcome remain in JSON text
+  content. Product domain errors remain unchanged. Automatic multi-round-trip
+  tool replay is explicitly disabled; uncertain writes are never retried.
+
+Validation completed locally:
+
+- `sh scripts/check.sh`: format, locked dependencies, module verification, vet,
+  full Go race suite, release-script tests, Python tests, build and process smoke.
+  The actual independent-Backend Go test remains a separate CI integration job;
+  it is not exercised by invoking this script without the required binary paths.
+- New regression tests exercise ordinary and negotiated discovery, canonical
+  fingerprints/references, precise numbers through actual local MCP HTTP calls,
+  concurrent product isolation, unchanged argument bytes, Gateway/domain errors,
+  malformed or unmatched result rejection and a lost write response with one
+  execution only. These run in the existing required Go CI jobs.
+- Built `nox-gateway:point2-check`; `scripts/check-image.py` passed with disposable
+  containers/volumes, including non-root startup, socket access, private persistent
+  identity, restart, healthcheck and rejected anonymous MCP/TCP pairing.
+- The existing Backend `scripts/check-suite-proxy.py --browser` passed against
+  published Backend/frontend v1.2.2 and that candidate Gateway image: actual
+  browser/dashboard publication, normal Gateway pairing, Backend tool execution,
+  ten canonical CLI definitions and preserved association after Backend restart.
+  This uses synthetic Auth/account/session data and temporary local resources.
+
+No deployment configuration, native credential store, installed service, commit,
+tag, push or release was changed. Temporary test containers, networks, volumes and
+the candidate image were removed. Deployment still requires the owner's updated
+Gateway image and validation. No new environment variables, Compose edits or
+service re-pairing are required for these corrections.

@@ -145,6 +145,8 @@ func (s *memoryStore) SaveRegistry(raw []byte) error {
 
 type productFixture struct {
 	runtime          *noxmcp.Runtime
+	response         atomic.Pointer[mcp.CallToolResult]
+	request          atomic.Value // Raw tools/call request, for wire-level assertions.
 	writes           atomic.Int64
 	drop             atomic.Bool
 	started, stopped chan struct{}
@@ -176,13 +178,15 @@ func fixture(t *testing.T, products ...string) (*Gateway, *fixtureAuthority, map
 		productStates[product] = state
 		policies := map[string]noxmcp.SuitePolicy{}
 		tools := []noxmcp.Tool{}
+		descriptors := map[string]noxmcp.JSON{}
 		for _, name := range []string{"read", "write", "wait"} {
 			scopes := []string{"nox:inspect"}
 			if name == "write" {
 				scopes = append(scopes, "nox:write")
 			}
 			policies[name], _ = noxmcp.NewSuitePolicy(scopes, false)
-			tools = append(tools, noxmcp.Tool{Name: name, Description: name, InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"}, ReadOnly: name != "write", Meta: map[string]any{"cli": name}, Execute: func(ctx noxmcp.ExecutionContext, _ map[string]any) (map[string]any, error) {
+			descriptors[name] = noxmcp.JSON{"version": "1.0", "navigation": noxmcp.JSON{"label": name}, "parameters": noxmcp.JSON{"/selection": noxmcp.JSON{"options": noxmcp.JSON{"tool": "read"}}}}
+			tools = append(tools, noxmcp.Tool{Name: name, Description: name, InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"}, ReadOnly: name != "write", Meta: map[string]any{"cli": name, "custom": "preserved"}, Execute: func(ctx noxmcp.ExecutionContext, _ map[string]any) (map[string]any, error) {
 				if name == "write" {
 					if e := ctx.CheckActive(); e != nil {
 						return nil, e
@@ -200,10 +204,23 @@ func fixture(t *testing.T, products ...string) (*Gateway, *fixtureAuthority, map
 		}
 		runtime, e := noxmcp.NewSuite(noxmcp.Options{AppID: product, Name: product, Version: "test", Tools: tools}, noxmcp.SuiteRuntimeOptions{Policies: policies, Verification: func() noxmcp.SuiteVerificationOptions {
 			return noxmcp.SuiteVerificationOptions{Issuer: "urn:nox:fixture", Audience: record.Connection.BaseUrl + "/mcp", ProductID: product, AssociationID: record.AssociationID, GatewayServiceID: "gateway-fixture", RegistrationRevision: record.Revision, ServiceCredentialRevision: "credential-fixture", Keys: map[string]noxmcp.SuiteSigningKey{kid: authority.public}}
+		}}, noxmcp.DiscoveryOptions{ServerID: product, Descriptors: descriptors, ResolveView: func(context.Context, *mcp.RequestExtra, []*mcp.Tool) (string, []string, []string, noxmcp.JSON, error) {
+			return "fixture", nil, nil, nil, nil
 		}})
 		if e != nil {
 			t.Fatal(e)
 		}
+		runtime.Server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+				result, err := next(ctx, method, request)
+				if call, ok := result.(*mcp.CallToolResult); method == "tools/call" && ok && !call.IsError && err == nil {
+					if replacement := state.response.Load(); replacement != nil {
+						return replacement, nil
+					}
+				}
+				return result, err
+			}
+		})
 		state.runtime = runtime
 		listener, cleanup, e := transport.Listen(dir, product)
 		if e != nil {
@@ -217,6 +234,13 @@ func fixture(t *testing.T, products ...string) (*Gateway, *fixtureAuthority, map
 			}
 			raw, _ := io.ReadAll(r.Body)
 			r.Body = io.NopCloser(bytes.NewReader(raw))
+			var message struct {
+				Method string `json:"method"`
+			}
+			_ = json.Unmarshal(raw, &message)
+			if message.Method == "tools/call" {
+				state.request.Store(bytes.Clone(raw))
+			}
 			if state.drop.Load() && bytes.Contains(raw, []byte(`"method":"tools/call"`)) {
 				buffer := httptest.NewRecorder()
 				handler.ServeHTTP(buffer, r)
@@ -246,12 +270,21 @@ func rpc(t *testing.T, g *Gateway, key, method string, id any, params map[string
 	req := httptest.NewRequest("POST", "http://gateway/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	protocol := "2025-11-25"
+	if meta, ok := params["_meta"].(map[string]any); ok {
+		if version, ok := meta[mcp.MetaKeyProtocolVersion].(string); ok {
+			protocol = version
+		}
+	}
+	req.Header.Set("MCP-Protocol-Version", protocol)
+	req.Header.Set("Mcp-Method", method)
 	req.Header.Set("Authorization", "Bearer "+key)
 	res := httptest.NewRecorder()
 	g.ServeHTTP(res, req)
 	var value map[string]any
-	if e := json.Unmarshal(res.Body.Bytes(), &value); e != nil && res.Body.Len() != 0 {
+	decoder := json.NewDecoder(bytes.NewReader(res.Body.Bytes()))
+	decoder.UseNumber()
+	if e := decoder.Decode(&value); e != nil && res.Body.Len() != 0 {
 		t.Fatal("non-JSON RPC response", res.Code, res.Body.String())
 	}
 	return res.Code, value
@@ -364,7 +397,7 @@ func TestRestrictedServiceProbe(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	session, closeSession, e := g.connect(t.Context(), r, id, nil)
+	session, closeSession, e := g.connect(t.Context(), r, id, nil, nil)
 	if e != nil {
 		t.Fatal(e)
 	}

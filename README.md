@@ -36,9 +36,11 @@ are not Suite setup requirements.** Optional HTTPS for browser/client access is 
 separate deployment choice. Remote clients use the deployment's normal access path;
 Suite service communication remains local even when clients connect remotely.
 
-The Gateway adapter is implemented against published SDK **0.7.2**, contract **1.0**,
-and tested against actual Backend **v1.1.1**. Yard adaptation, other participating
-products, the CLI and the complete installed Suite journey remain subsequent work.
+The Gateway adapter uses published SDK **0.7.3**, contract **1.0**. The candidate
+image has been locally validated with published Backend **v1.2.2**, including
+pairing, MCP execution, CLI definitions and Backend restart. The CI integration
+baseline remains pinned to Backend v1.1.1. See the dated verification record in
+[the implementation record](docs/implementation-plan.md) for the validation scope.
 An existing product link in Backend is not automatically an enrolled MCP product.
 
 ## Client endpoint and diagnostics
@@ -67,6 +69,11 @@ is negotiated, with conventional discovery fallback. Standalone SSE/subscription
 are not advertised. Clients re-read catalogs with private TTL/fingerprint semantics;
 there is no fabricated push-notification channel in JSON mode.
 
+Conventional `tools/list` omits the reserved `_meta.cli` menu path. It preserves
+other metadata, schemas, names and authorization. Full canonical paths and rich
+CLI descriptors remain available through negotiated `nox/tools/definitions`, with
+translated tool references and their canonical fingerprints.
+
 ## Authorization, availability and execution
 
 The personal key goes only to Backend for authentication/delegation. Products receive
@@ -92,7 +99,14 @@ fingerprints, then forwards the original tool name. One total deadline includes
 authorization and discovery. Cancellation/disconnect/shutdown reaches the downstream
 request. **Tool calls are never automatically retried.** A lost result after possible
 execution reports `EXECUTION_OUTCOME_UNCONFIRMED`, `retryable: false` and unknown
-outcome; a disconnect is not evidence that a write was rolled back.
+outcome; a disconnect is not evidence that a write was rolled back. Gateway-generated
+tool errors use `isError: true` and JSON error data in a text content block, without
+success `structuredContent`. Product domain errors pass through unchanged.
+
+Structured result and result-metadata numbers retain their original JSON precision,
+including integers beyond 2^53. Restoration uses the bounded JSON response for that
+specific call; it does not cache results or parse ordinary text blocks. These fixes
+require no Compose changes, new environment variables or re-pairing.
 
 ## Configuration
 

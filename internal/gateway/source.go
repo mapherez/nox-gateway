@@ -31,6 +31,7 @@ type authTransport struct {
 	controls   *noxmcp.SuiteRequestControls
 	timeout    time.Duration
 	maxPayload int
+	call       *callResponse
 }
 
 func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -47,6 +48,10 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		q.Header.Set("Nox-Timeout-Ms", strconv.FormatInt(c.TimeoutMS, 10))
 	}
 	q.GetBody = nil // Never replay an uncertain mutation, even with idempotency metadata.
+	id, e := t.call.request(q, t.maxPayload)
+	if e != nil {
+		return nil, e
+	}
 	res, e := t.base.RoundTrip(q)
 	if e != nil {
 		return nil, e
@@ -56,10 +61,11 @@ func (t authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	if e != nil || len(raw) > t.maxPayload {
 		return nil, errors.New("PAYLOAD_LIMIT")
 	}
+	t.call.receive(id, raw)
 	res.Body = io.NopCloser(bytes.NewReader(raw))
 	return res, nil
 }
-func (g *Gateway) connect(ctx context.Context, r noxmcp.SuiteRegistrationRecord, id *noxmcp.VerifiedSuiteIdentity, controls *noxmcp.SuiteRequestControls) (*mcp.ClientSession, func(), error) {
+func (g *Gateway) connect(ctx context.Context, r noxmcp.SuiteRegistrationRecord, id *noxmcp.VerifiedSuiteIdentity, controls *noxmcp.SuiteRequestControls, call *callResponse) (*mcp.ClientSession, func(), error) {
 	select {
 	case g.network <- struct{}{}:
 	case <-ctx.Done():
@@ -71,8 +77,8 @@ func (g *Gateway) connect(ctx context.Context, r noxmcp.SuiteRegistrationRecord,
 		release()
 		return nil, nil, e
 	}
-	httpClient := &http.Client{Transport: authTransport{base: t.HTTP.Transport, token: id.AccessToken(), controls: controls, timeout: g.limits.CallTimeout, maxPayload: g.limits.MaxPayloadBytes}, CheckRedirect: t.HTTP.CheckRedirect}
-	client := mcp.NewClient(&mcp.Implementation{Name: "nox-gateway", Version: g.version}, nil)
+	httpClient := &http.Client{Transport: authTransport{base: t.HTTP.Transport, token: id.AccessToken(), controls: controls, timeout: g.limits.CallTimeout, maxPayload: g.limits.MaxPayloadBytes, call: call}, CheckRedirect: t.HTTP.CheckRedirect}
+	client := mcp.NewClient(&mcp.Implementation{Name: "nox-gateway", Version: g.version}, &mcp.ClientOptions{MultiRoundTrip: &mcp.MultiRoundTripOptions{Disabled: true}})
 	if e = noxmcp.RegisterDiscoveryClient(client); e != nil {
 		t.Close()
 		release()
@@ -100,7 +106,7 @@ func (g *Gateway) source(ctx context.Context, partition string, r noxmcp.SuiteRe
 	if !force && old != nil && old.generation == generation && time.Now().Before(old.expires) && time.Now().Before(id.ExpiresAt()) {
 		return old.source, nil
 	}
-	session, closeSession, e := g.connect(ctx, r, id, nil)
+	session, closeSession, e := g.connect(ctx, r, id, nil, nil)
 	if e != nil {
 		if old != nil && old.generation == generation && time.Now().Before(id.ExpiresAt()) {
 			copy := old.source
