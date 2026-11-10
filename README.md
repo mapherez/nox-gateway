@@ -2,55 +2,77 @@
 
 One connection to the tools in your NoX Suite.
 
-NoX Gateway lets MCP clients and NoX CLI discover and use tools provided by connected Suite applications. Instead of configuring every product in every client, you connect to Gateway and receive the tools your account is authorized to use.
+NoX Gateway connects NoX CLI and MCP-compatible AI assistants to the apps in your Suite. Configure one Gateway connection in your client, then discover and use the tools available to your account across connected apps.
 
-Gateway is a headless service. It has no dashboard and does not implement the applications' business operations: it discovers their definitions, checks current authority and routes each request to the product that owns it.
+- One MCP address instead of a separate connection for every app.
+- Automatic discovery of registered products and their tools.
+- Access checked against your Backend personal API key.
+- Requests routed to the app that performs the operation.
 
-## What it provides
+Gateway runs as a background service. It has no dashboard: you connect it from Backend, then use it from CLI or your chosen MCP client.
 
-| Capability | What it does |
-| --- | --- |
-| A shared MCP endpoint | Gives clients one entry point for connected Suite tools. |
-| Product discovery | Reads registered products and their available tool definitions. |
-| Authorized catalogs | Presents tools according to the caller's effective access. |
-| Request routing | Preserves tool inputs and sends the request to its owning product. |
-| Availability tracking | Distinguishes registered products from services that are currently reachable. |
-| Failure handling | Propagates errors and cancellation without automatically repeating tool calls. |
+## What you need
 
-Products define their own tools and interaction metadata. Gateway preserves those definitions without adding product-specific menus, commands or storage logic.
+- Docker with Docker Compose.
+- NoX Backend and the participating apps on the **same Docker host**.
+- A private address reachable by the computers that will use CLI or MCP, either on your LAN or through a VPN.
+- A personal API key generated in Backend.
 
-## How it fits into NoX Suite
+Gateway can use a private HTTP address. You do not need to generate certificates or expose it to the internet to use your Suite.
 
-Backend is the authority for personal API keys, registration and service permissions. Yard manages deployment and initiates registration. Gateway consumes that registry and provides the client-facing tool connection.
+## Help
 
-Participating services communicate on the same host through the shared local channel. Client access is separate: NoX CLI can connect through the installation's private network or VPN. Native HTTP or HTTPS access is a deployment choice, not a requirement to copy certificates between Suite containers.
+[Suite connection reference](https://github.com/mapherez/nox-mcp/blob/master/Documents/SUITE_SAME_HOST_INTEGRATION.md) · [Optional HTTPS](docs/https-setup.md) · [Report a problem](https://github.com/mapherez/nox-gateway/issues)
 
-A client authenticates with a Backend personal API key. Products receive scoped delegations rather than that personal key. Existing valid authority has bounded reuse; an outage does not create new permissions or extend expired authority.
-
-## Documentation
-
-- [Same-host communication and enrollment](https://github.com/mapherez/nox-mcp/blob/master/Documents/SUITE_SAME_HOST_INTEGRATION.md)
-- [Gateway and shared integration contract](https://github.com/mapherez/nox-mcp/blob/master/Documents/GATEWAY_CONTRACT.md)
-- [Product integration](https://github.com/mapherez/nox-mcp/blob/master/Documents/PRODUCT_INTEGRATION_PROPOSAL.md)
-- [SDK integration](https://github.com/mapherez/nox-mcp/blob/master/Documents/INTEGRATION.md)
-- [Optional native HTTPS](docs/https-setup.md)
+For integration developers: [Gateway contract](https://github.com/mapherez/nox-mcp/blob/master/Documents/GATEWAY_CONTRACT.md).
 
 ## Usage
 
-Deploy [docker-compose.yml](docker-compose.yml) on the same Docker host as Backend and the participating products. Review [.env.example](.env.example) for the available address, binding, storage and runtime settings.
+### Install
+
+On the same Docker server as Backend, download the deployment file into a new folder:
+
+```sh
+mkdir nox-gateway
+cd nox-gateway
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/mapherez/nox-gateway/main/docker-compose.yml
+```
+
+The supplied configuration uses host port **5711**. If that port is already occupied, create a `.env` file beside the Compose file with `NOX_GATEWAY_PORT` set to an unused port. If your Suite uses a custom local volume name, also set the matching `NOX_SUITE_LOCAL_VOLUME_NAME`. No API key needs to be put in Gateway's environment.
+
+Start Gateway:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-Use the same local-channel volume name as the other Suite services. In Backend's **Service connections**, enter Gateway's native address, verify its identity and confirm the connection. Pairing and credential delivery run through the local channel; interrupted setup can be resumed from Backend.
+### Connect Gateway to Backend
 
-For a conventional MCP client, configure your Gateway address followed by `/mcp` and supply your Backend personal API key in the authorization header. In NoX CLI, enter the Gateway base address and key in Settings.
+1. Open Backend's dashboard and go to **Service connections**.
+2. Enter Gateway's private base address, including the published port.
+3. Choose **Verify**, then **Connect**, and confirm the verified local identity.
 
-`/healthz` reports process liveness; `/readyz` reports whether Gateway has verified its Backend connection and synchronized the registry. A healthy process alone does not prove that products are ready to execute tools.
+Use your server's hostname or private address. Pairing happens through the shared local Docker volume; you do not need to copy credential files. Services on other hosts cannot join through that channel.
 
-Keep Gateway's private data volume when updating and back it up consistently. It contains persistent service identity and trust state. Do not share that data volume as the common runtime channel.
+### Use your apps
+
+In **NoX CLI**, open Settings and enter the Gateway base address and your Backend personal API key.
+
+In an **MCP-compatible AI client**, add a Streamable HTTP connection using the Gateway base address followed by `/mcp`. Set its authorization header to `Authorization: Bearer <YOUR_BACKEND_API_KEY>`, replacing the placeholder with your key. The exact settings screen depends on the client.
+
+Gateway exposes tools from connected, available products. A registered service and a currently available MCP endpoint are separate states.
+
+### Update and check the service
+
+From the installation folder:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+Keep Gateway's data volume when updating. For a basic check, open its address followed by `/healthz`. `/readyz` additionally checks whether Gateway has verified its Backend connection and synchronized the registry.
 
 ## License & Attribution
 
