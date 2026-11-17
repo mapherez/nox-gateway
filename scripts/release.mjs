@@ -1,3 +1,4 @@
+import { releaseRequest } from './ci-policy.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { readFile, writeFile, realpath } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
@@ -88,7 +89,7 @@ export async function runReleaseChecks(root, tag, run = runReleaseCommand) {
   await run('python3', ['scripts/check-image.py', '--image', 'nox-gateway:release-check', '--version', tag], { cwd: root });
 }
 
-export async function release(root, input, { check = runReleaseChecks } = {}) {
+export async function release(root, input, { check = () => {} } = {}) {
   const version = normalizeVersion(input);
   const tag = `v${version}`;
   const git = (...args) => execFileSync('git', args, {
@@ -114,6 +115,9 @@ export async function release(root, input, { check = runReleaseChecks } = {}) {
   git('var', 'GIT_AUTHOR_IDENT');
   git('var', 'GIT_COMMITTER_IDENT');
   const head = git('rev-parse', 'HEAD');
+  if (git('ls-remote', '--heads', 'origin', `refs/heads/${branch}`).split(/\s+/)[0] !== head) {
+    throw new Error('Faz push do commit de origem antes da release.');
+  }
   try {
     manifest.version = version;
     const indent = originalPackage.match(/\n([\t ]+)"/)?.[1] ?? 2;
@@ -128,7 +132,8 @@ export async function release(root, input, { check = runReleaseChecks } = {}) {
       throw new Error('A validacao alterou o repositorio fora de package.json. Reve as alteracoes antes de publicar.');
     }
     git('add', '--', 'package.json');
-    git('commit', '-m', `chore: release ${tag}`);
+    git('commit', '-m', `chore: release ${tag}`, '-m', `nox-gateway-Release: ${tag}`);
+    if (releaseRequest(root, git('rev-parse', 'HEAD'))?.sourceSha !== head) throw new Error('Pedido de release invalido.');
   } catch (error) {
     // Restore our edit only if a release commit was not created. Keep unrelated changes.
     if (git('rev-parse', 'HEAD') === head) {
@@ -162,7 +167,7 @@ export function isMainScript(url) {
 if (isMainScript(import.meta.url)) {
   (async () => {
     const tag = await runReleaseCLI(repoRoot, process.argv.slice(2));
-    console.log(`Commit e tag ${tag} publicados. O GitHub Actions vai publicar a imagem e criar a release.`);
+    console.log(`Commit e tag ${tag} publicados. O GitHub Actions reutiliza o CI aprovado antes de publicar a imagem e criar a release.`);
     console.log(`https://github.com/mapherez/nox-gateway/actions/workflows/release.yml`);
   })().catch(error => {
     console.error(error.stderr?.toString().trim() || error.message);

@@ -3,6 +3,13 @@
   "version": "0.0.2",
   "private": true,
   "scripts": {
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "test:ci-policy": "node --test scripts/ci-policy.test.mjs",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "prepare": "node --input-type=module -e \"import { existsSync } from 'node:fs'; if (existsSync('scripts/install-hooks.mjs')) await import('./scripts/install-hooks.mjs');\"",
+    "precommit": "node scripts/git-hooks.mjs commit",
+    "check": "node scripts/git-hooks.mjs check",
+    "format": "node scripts/git-hooks.mjs format",
+    "prepush": "npm run check"
   }
 }

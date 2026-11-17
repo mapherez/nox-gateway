@@ -2,20 +2,58 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: nox-gateway-ci-${{ github.event_name == 'push' && contains(github.event.head_commit.message, 'nox-gateway-Release:') && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: Select CI work
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - name: Recognize a version-only release request
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode=full
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            mode=$(node scripts/ci-policy.mjs classify "$GITHUB_SHA")
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+  policy:
+    name: CI reuse policy tests
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          package-manager-cache: false
+      - run: node --test scripts/ci-policy.test.mjs
+
   gateway:
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
     name: Gateway / ${{ matrix.os }} / Go ${{ matrix.go }}
     strategy:
       fail-fast: false
@@ -53,6 +91,8 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -mod=readonly -trimpath -o bin/nox-gateway-linux-arm64 ./cmd/nox-gateway
 
   backend-integration:
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
     name: Actual Backend / local pairing and MCP
     runs-on: ubuntu-latest
     steps:
@@ -92,6 +132,8 @@ jobs:
         run: go test -race -mod=readonly -count=1 -v ./internal/acceptance
 
   image:
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
     name: Packaged Gateway
     runs-on: ubuntu-latest
     steps:
@@ -102,3 +144,15 @@ jobs:
       - run: docker build --build-arg VERSION=ci-validation -t nox-gateway:ci .
       - run: python3 scripts/check-image.py --image nox-gateway:ci --version ci-validation
       - run: docker compose -f docker-compose.yml config --quiet && docker compose -f docker-compose.dev.yml config --quiet
+
+  approved:
+    name: CI approved
+    needs: [plan, policy, gateway, backend-integration, image]
+    if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every source gate
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node -e 'const jobs = JSON.parse(process.env.RESULTS); if (Object.values(jobs).some(job => job.result !== "success")) process.exit(1)'

@@ -1,0 +1,17 @@
+{
+  "policy": "scripts/ci-policy.mjs",
+  "go": true,
+  "vite": [],
+  "check": [
+    {
+      "command": "go",
+      "args": [
+        "vet",
+        "-mod=readonly",
+        "./..."
+      ],
+      "cwd": "."
+    }
+  ],
+  "format": []
+}
