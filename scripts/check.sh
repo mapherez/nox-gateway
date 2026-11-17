@@ -3,8 +3,8 @@ set -eu
 cd "$(dirname "$0")/.."
 formatted=$(gofmt -l cmd internal)
 if [ -n "$formatted" ]; then
-    printf '%s\n' "$formatted"
-    exit 1
+  printf '%s\n' "$formatted"
+  exit 1
 fi
 go mod tidy -diff
 go mod verify

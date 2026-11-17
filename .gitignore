@@ -21,3 +21,6 @@ __pycache__/
 /scripts/ca/
 /scripts/certificates/
 /scripts/COMO-USAR-CERTIFICADOS.md
+
+# Local Node tooling dependencies
+node_modules/

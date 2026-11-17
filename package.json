@@ -9,7 +9,15 @@
     "prepare": "node --input-type=module -e \"import { existsSync } from 'node:fs'; if (existsSync('scripts/install-hooks.mjs')) await import('./scripts/install-hooks.mjs');\"",
     "precommit": "node scripts/git-hooks.mjs commit",
     "check": "node scripts/git-hooks.mjs check",
-    "format": "node scripts/git-hooks.mjs format",
-    "prepush": "npm run check"
+    "format": "node scripts/format-files.mjs",
+    "prepush": "node scripts/format-files.mjs --check --revision HEAD && npm run check",
+    "format:check": "node scripts/format-files.mjs --check",
+    "test:format": "node --test scripts/format-files.test.mjs"
+  },
+  "devDependencies": {
+    "@prettier/plugin-xml": "3.4.2",
+    "prettier": "3.10.1",
+    "prettier-plugin-sh": "0.20.2",
+    "vite-plus": "1.6.0"
   }
 }

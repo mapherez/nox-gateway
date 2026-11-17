@@ -4,12 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { test } from "node:test";
-import {
-  normalizeVersion,
-  release,
-  runReleaseChecks,
-  validateReleaseTag,
-} from "./release.mjs";
+import { normalizeVersion, release, runReleaseChecks, validateReleaseTag } from "./release.mjs";
 const git = (root, ...args) =>
   execFileSync("git", args, {
     cwd: root,
@@ -23,16 +18,9 @@ async function repository(t) {
     origin = resolve(temp, "origin.git");
   await mkdir(root);
   const manifest =
-    JSON.stringify(
-      { name: "nox-gateway", version: "0.0.0", private: true },
-      null,
-      2,
-    ) + "\n";
+    JSON.stringify({ name: "nox-gateway", version: "0.0.0", private: true }, null, 2) + "\n";
   await writeFile(resolve(root, "package.json"), manifest);
-  await writeFile(
-    resolve(root, "go.mod"),
-    "module gateway-release-fixture\n\ngo 1.26.0\n",
-  );
+  await writeFile(resolve(root, "go.mod"), "module gateway-release-fixture\n\ngo 1.26.0\n");
   git(root, "init", "--initial-branch=main");
   git(root, "config", "user.name", "Gateway release fixture");
   git(root, "config", "user.email", "fixture@example.invalid");
@@ -51,9 +39,7 @@ test("release tags reject malformed, mismatched and Docker-incompatible versions
   for (const version of ["", "1.2", "01.0.0", "1.0.0\n", "1.0.0+build"])
     assert.throws(() => normalizeVersion(version));
   assert.equal(normalizeVersion("v1.2.3-rc.1"), "1.2.3-rc.1");
-  assert.throws(() =>
-    validateReleaseTag("v1.2.4", JSON.stringify({ version: "1.2.3" })),
-  );
+  assert.throws(() => validateReleaseTag("v1.2.4", JSON.stringify({ version: "1.2.3" })));
 });
 test("failed verification restores the version and does not create or push a release commit", async (t) => {
   const f = await repository(t);
@@ -65,10 +51,7 @@ test("failed verification restores the version and does not create or push a rel
     }),
     /verification failed/,
   );
-  assert.equal(
-    await readFile(resolve(f.root, "package.json"), "utf8"),
-    f.manifest,
-  );
+  assert.equal(await readFile(resolve(f.root, "package.json"), "utf8"), f.manifest);
   assert.equal(git(f.root, "rev-parse", "HEAD"), f.head);
   assert.equal(git(f.root, "status", "--porcelain"), "");
   assert.equal(git(f.root, "tag", "--list"), "");
@@ -103,10 +86,7 @@ test("validated release commits only the package version and pushes commit/tag a
     check: async (root, tag) => {
       assert.equal(root, f.root);
       assert.equal(tag, "v1.0.0");
-      validateReleaseTag(
-        tag,
-        await readFile(resolve(root, "package.json"), "utf8"),
-      );
+      validateReleaseTag(tag, await readFile(resolve(root, "package.json"), "utf8"));
       checked = true;
     },
   });
@@ -130,10 +110,7 @@ test("verification runs at the actual Gateway module root and builds one Gateway
   });
   assert.equal(calls.filter((c) => c.command === "docker").length, 1);
   assert.equal(calls.find((c) => c.command === "docker").args.at(-1), ".");
-  assert.equal(
-    calls.find((c) => c.command === "python3").args[0],
-    "scripts/check-image.py",
-  );
+  assert.equal(calls.find((c) => c.command === "python3").args[0], "scripts/check-image.py");
   assert.equal(
     calls.some((c) => c.args.includes("frontend")),
     false,

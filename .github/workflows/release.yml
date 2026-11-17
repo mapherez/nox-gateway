@@ -1,7 +1,7 @@
 name: Release
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 permissions:
   contents: read
 concurrency:
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: "26"
           package-manager-cache: false
       - name: Require successful CI for the exact source
         id: ci
@@ -52,7 +52,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: "24"
           package-manager-cache: false
       - run: node scripts/check-release-version.mjs '${{ github.ref_name }}'
       - name: Refuse an existing GitHub Release

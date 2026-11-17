@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: "26"
           package-manager-cache: false
       - name: Recognize a version-only release request
         id: plan
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '26'
+          node-version: "26"
           package-manager-cache: false
       - run: node --test scripts/ci-policy.test.mjs
 
@@ -60,7 +60,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            go: '1.26.0'
+            go: "1.26.0"
           - os: ubuntu-latest
             go: stable
           - os: macos-latest
@@ -71,7 +71,7 @@ jobs:
         uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: "24"
           package-manager-cache: false
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -81,7 +81,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
       - name: Format, dependency lock, vet, race tests, build and binary smoke
         run: sh scripts/check.sh
       - name: Cross-compile Linux deployment targets
@@ -107,7 +107,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: "24"
           package-manager-cache: false
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -119,7 +119,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
       - name: Build actual Gateway
         run: go build -mod=readonly -trimpath -o "$RUNNER_TEMP/nox-gateway" ./cmd/nox-gateway
       - name: Build actual Backend
@@ -140,14 +140,33 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version: "3.13"
       - run: docker build --build-arg VERSION=ci-validation -t nox-gateway:ci .
       - run: python3 scripts/check-image.py --image nox-gateway:ci --version ci-validation
       - run: docker compose -f docker-compose.yml config --quiet && docker compose -f docker-compose.dev.yml config --quiet
 
+  formatting:
+    name: Formatting
+    needs: plan
+    if: needs.plan.outputs.mode == 'full'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run format:check
+      - run: npm run test:format
+
   approved:
     name: CI approved
-    needs: [plan, policy, gateway, backend-integration, image]
+    needs: [plan, policy, gateway, backend-integration, image, formatting]
     if: ${{ !cancelled() && needs.plan.outputs.mode == 'full' }}
     runs-on: ubuntu-latest
     steps:

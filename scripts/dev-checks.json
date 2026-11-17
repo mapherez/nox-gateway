@@ -5,13 +5,8 @@
   "check": [
     {
       "command": "go",
-      "args": [
-        "vet",
-        "-mod=readonly",
-        "./..."
-      ],
+      "args": ["vet", "-mod=readonly", "./..."],
       "cwd": "."
     }
-  ],
-  "format": []
+  ]
 }

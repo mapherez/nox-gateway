@@ -5,11 +5,7 @@
   "files": [
     {
       "path": "package.json",
-      "fields": [
-        [
-          "version"
-        ]
-      ]
+      "fields": [["version"]]
     }
   ]
 }

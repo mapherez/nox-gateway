@@ -1,0 +1,7 @@
+{
+  "ruffVersion": "0.17.3",
+  "rustEdition": "2021",
+  "sqlDialect": "sqlite",
+  "immutable": [],
+  "languages": [".go", ".py"]
+}

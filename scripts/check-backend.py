@@ -306,9 +306,9 @@ def run(args):
                 if any(t["name"] == "nox-backend__backend_health" for t in tools):
                     break
                 time.sleep(0.1)
-            assert any(
-                t["name"] == "nox-backend__backend_health" for t in tools
-            ), result
+            assert any(t["name"] == "nox-backend__backend_health" for t in tools), (
+                result
+            )
             catalog = rpc(
                 "nox/tools/catalog",
                 {
@@ -372,9 +372,9 @@ def run(args):
             )["result"].get("isError")
             # Confirm outage reuses existing valid authority without extending it.
             stop(b)
-            assert rpc("tools/list", {})["result"][
-                "tools"
-            ], "valid private view disappeared during a bounded outage"
+            assert rpc("tools/list", {})["result"]["tools"], (
+                "valid private view disappeared during a bounded outage"
+            )
             b = start(args.backend, benv, "backend")
             wait(burl, "/v1/health", lambda s, v: s == 200)
             # Role/status changes reach the Gateway through authority events.

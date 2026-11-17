@@ -87,7 +87,7 @@ If you use, fork, or modify this code, you **must** provide attribution by linki
 
 ---
 
-*For more details on what you can and cannot do, please refer to the [LICENSE](LICENSE) file in this repository.*
+_For more details on what you can and cannot do, please refer to the [LICENSE](LICENSE) file in this repository._
 
 ## Disclaimer of Warranty
 
